@@ -1,0 +1,14 @@
+{
+  "name": "olivia-render-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/render-engine.js",
+    "selftest": "node src/selftest.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

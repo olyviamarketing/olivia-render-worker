@@ -1,0 +1,56 @@
+OLIVIA — NEXT BUBBLE STEP AFTER V114 QUEUE
+==========================================
+
+Do NOT change the editor again yet.
+
+Current flow:
+OLIVIA V114 -> render_manifest -> RenderJob in Bubble -> process_render_job
+
+Now the backend workflow process_render_job must call the worker.
+
+API request
+-----------
+POST <YOUR_WORKER_BASE_URL>/render
+Content-Type: application/json
+
+Body:
+render_job's manifest_json
+
+IMPORTANT:
+manifest_json already contains the entire OLIVIA_RENDER_JOB_V1 envelope.
+Send it as raw JSON, not as a quoted JSON string.
+
+If WORKER_TOKEN is enabled:
+Authorization: Bearer <your secret>
+
+Expected success JSON
+---------------------
+{
+  "schema": "OLIVIA_RENDER_RESULT_V1",
+  "jobId": "olivia-...",
+  "status": "completed",
+  "outputUrl": "https://.../outputs/olivia-....mp4",
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "aspect": "16:9",
+    "fps": 30
+  },
+  "warnings": [],
+  "elapsedMs": 12345
+}
+
+Bubble success changes
+----------------------
+RenderJob.status       = completed
+RenderJob.output_url   = API response's outputUrl
+RenderJob.progress     = 100
+RenderJob.completed_at = Current date/time
+
+Bubble failure changes
+----------------------
+RenderJob.status        = failed
+RenderJob.error_message = API response's error
+
+Worker V1 deliberately blocks blur/zoom transitions and warmth/tint
+rather than returning an MP4 that does not match the OLIVIA preview.
