@@ -44,8 +44,19 @@ export function validateJob(job) {
   return { ok: errors.length === 0, errors };
 }
 
+function normaliseRequestedAspectRatio(value) {
+  const raw = String(value || '').trim();
+  const compact = raw.toLowerCase().replace(/\s/g, '');
+
+  if (compact.includes('9:16') || compact.includes('vertical')) return '9:16';
+  if (compact.includes('16:9') || compact.includes('landscape')) return '16:9';
+  if (compact.includes('1:1') || compact.includes('square')) return '1:1';
+
+  return raw.replace(/\s/g, '');
+}
+
 export function chooseOutputSize(manifest) {
-  const aspect = String(manifest?.output?.requestedAspectRatio || '').replace(/\s/g, '');
+  const aspect = normaliseRequestedAspectRatio(manifest?.output?.requestedAspectRatio);
   const longEdge = Math.max(640, n(process.env.LOW_MEMORY_LONG_EDGE, 1280));
 
   if (aspect === '9:16') return { width: 720, height: 1280, aspect };
