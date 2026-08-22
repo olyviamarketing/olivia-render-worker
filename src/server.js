@@ -1,3 +1,4 @@
+
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
@@ -10,6 +11,59 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR || '/data/outputs';
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 8_000_000);
 const WORKER_TOKEN = String(process.env.WORKER_TOKEN || '');
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+
+const renderJobs = new Map();
+
+function publicOutputUrl(filename) {
+  return PUBLIC_BASE_URL
+    ? `${PUBLIC_BASE_URL}/outputs/${filename}`
+    : `/outputs/${filename}`;
+}
+
+function publicStatusUrl(jobId) {
+  return PUBLIC_BASE_URL
+    ? `${PUBLIC_BASE_URL}/render/status/${encodeURIComponent(jobId)}`
+    : `/render/status/${encodeURIComponent(jobId)}`;
+}
+
+function safeJobId(job) {
+  const raw = String(job && job.jobId || '').trim();
+  return raw || `olivia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
+}
+
+async function runRenderInBackground(job) {
+  const jobId = safeJobId(job);
+  const state = renderJobs.get(jobId);
+  if (!state) return;
+
+  state.status = 'processing';
+  state.startedAt = new Date().toISOString();
+
+  try {
+    const started = Date.now();
+    const result = await renderJob(job, { outputDir: OUTPUT_DIR });
+    const filename = path.basename(result.outputPath);
+
+    state.status = 'completed';
+    state.completedAt = new Date().toISOString();
+    state.elapsedMs = Date.now() - started;
+    state.outputUrl = publicOutputUrl(filename);
+    state.result = {
+      ...result,
+      outputUrl: state.outputUrl,
+      elapsedMs: state.elapsedMs
+    };
+    delete state.result.outputPath;
+  } catch (error) {
+    console.error('[OLIVIA ASYNC RENDER ERROR]', error);
+    state.status = 'failed';
+    state.completedAt = new Date().toISOString();
+    state.error = error.message;
+    state.code = error.code || 'RENDER_FAILED';
+    state.details = error.details || null;
+    state.ffmpeg = error.stderr ? String(error.stderr).slice(-12000) : null;
+  }
+}
 
 function json(res, status, body) {
   const payload = Buffer.from(JSON.stringify(body, null, 2));
@@ -74,7 +128,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, version ? 200 : 503, {
       ok: Boolean(version),
       service: 'olivia-render-worker',
-      worker: 'V1',
+      worker: 'V116B-LOW-MEM-ASYNC',
       ffmpeg: version
     });
   }
@@ -100,6 +154,107 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return json(res, error.status || 400, { error: error.message });
     }
+  }
+
+
+  if (req.method === 'POST' && url.pathname === '/render/start') {
+    try {
+      const job = await readJson(req);
+      const validation = validateJob(job);
+      if (!validation.ok) {
+        return json(res, 400, {
+          schema: 'OLIVIA_RENDER_ACCEPTED_V1',
+          status: 'rejected',
+          errors: validation.errors
+        });
+      }
+
+      const support = inspectSupport(job.manifest);
+      if (support.blocking && support.blocking.length) {
+        return json(res, 422, {
+          schema: 'OLIVIA_RENDER_ACCEPTED_V1',
+          status: 'rejected',
+          errors: support.blocking,
+          warnings: support.warnings || []
+        });
+      }
+
+      const jobId = safeJobId(job);
+
+      if (renderJobs.has(jobId)) {
+        const existing = renderJobs.get(jobId);
+        return json(res, 200, {
+          schema: 'OLIVIA_RENDER_ACCEPTED_V1',
+          jobId,
+          status: existing.status,
+          statusUrl: publicStatusUrl(jobId),
+          duplicate: true
+        });
+      }
+
+      renderJobs.set(jobId, {
+        jobId,
+        status: 'queued',
+        queuedAt: new Date().toISOString(),
+        startedAt: null,
+        completedAt: null,
+        outputUrl: null,
+        error: null,
+        code: null,
+        details: null,
+        ffmpeg: null,
+        elapsedMs: null,
+        result: null
+      });
+
+      setImmediate(() => {
+        runRenderInBackground({ ...job, jobId }).catch(error => {
+          console.error('[OLIVIA BACKGROUND TASK ERROR]', error);
+        });
+      });
+
+      return json(res, 202, {
+        schema: 'OLIVIA_RENDER_ACCEPTED_V1',
+        jobId,
+        status: 'queued',
+        statusUrl: publicStatusUrl(jobId)
+      });
+    } catch (error) {
+      return json(res, error.status || 400, {
+        schema: 'OLIVIA_RENDER_ACCEPTED_V1',
+        status: 'rejected',
+        error: error.message
+      });
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname.startsWith('/render/status/')) {
+    const jobId = decodeURIComponent(url.pathname.slice('/render/status/'.length));
+    const state = renderJobs.get(jobId);
+
+    if (!state) {
+      return json(res, 404, {
+        schema: 'OLIVIA_RENDER_STATUS_V1',
+        jobId,
+        status: 'not_found',
+        error: 'Render job is not present in this worker process.'
+      });
+    }
+
+    return json(res, 200, {
+      schema: 'OLIVIA_RENDER_STATUS_V1',
+      jobId,
+      status: state.status,
+      queuedAt: state.queuedAt,
+      startedAt: state.startedAt,
+      completedAt: state.completedAt,
+      outputUrl: state.outputUrl,
+      error: state.error,
+      code: state.code,
+      details: state.details,
+      elapsedMs: state.elapsedMs,
+      result: state.result
+    });
   }
 
   if (req.method === 'POST' && url.pathname === '/render') {
