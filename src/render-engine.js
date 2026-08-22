@@ -1,6 +1,7 @@
+
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, copyFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import path from 'node:path';
@@ -46,12 +47,20 @@ export function validateJob(job) {
 
 export function chooseOutputSize(manifest) {
   const aspect = String(manifest?.output?.requestedAspectRatio || '').replace(/\s/g, '');
-  if (aspect === '9:16') return { width: 1080, height: 1920, aspect };
-  if (aspect === '1:1') return { width: 1080, height: 1080, aspect };
-  if (aspect === '16:9') return { width: 1920, height: 1080, aspect };
+  const longEdge = Math.max(640, n(process.env.LOW_MEMORY_LONG_EDGE, 1280));
+
+  if (aspect === '9:16') return { width: 720, height: 1280, aspect };
+  if (aspect === '1:1') return { width: 720, height: 720, aspect };
+  if (aspect === '16:9') return { width: 1280, height: 720, aspect };
+
+  const sourceW = Math.max(2, n(manifest?.source?.width, 1280));
+  const sourceH = Math.max(2, n(manifest?.source?.height, 720));
+  const sourceLong = Math.max(sourceW, sourceH);
+  const scale = Math.min(1, longEdge / sourceLong);
+
   return {
-    width: even(n(manifest?.source?.width, 1280)),
-    height: even(n(manifest?.source?.height, 720)),
+    width: even(sourceW * scale),
+    height: even(sourceH * scale),
     aspect: aspect || 'source'
   };
 }
@@ -82,21 +91,44 @@ export function inspectSupport(manifest) {
   return { blocking, warnings };
 }
 
-async function runProcess(command, args, { cwd, onStderr } = {}) {
+async function runProcess(command, args, { cwd, onStderr, captureLimit = 2_000_000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        OMP_NUM_THREADS: process.env.OMP_NUM_THREADS || '1'
+      }
+    });
+
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', d => { stdout += d.toString(); });
+
+    function appendLimited(current, addition) {
+      const next = current + addition;
+      return next.length > captureLimit
+        ? next.slice(-captureLimit)
+        : next;
+    }
+
+    child.stdout.on('data', d => {
+      stdout = appendLimited(stdout, d.toString());
+    });
+
     child.stderr.on('data', d => {
       const s = d.toString();
-      stderr += s;
+      stderr = appendLimited(stderr, s);
       if (onStderr) onStderr(s);
     });
+
     child.on('error', reject);
     child.on('close', code => {
       if (code === 0) resolve({ stdout, stderr });
-      else reject(Object.assign(new Error(`${command} exited with code ${code}`), { stdout, stderr, code }));
+      else reject(Object.assign(
+        new Error(`${command} exited with code ${code}`),
+        { stdout, stderr, code }
+      ));
     });
   });
 }
@@ -245,105 +277,229 @@ function audioFilters(clip, duration, hasAudio) {
   return { sourceIn, sourceOut, lavfi: false, filters };
 }
 
-export async function buildFfmpegPlan(job, workDir, sourcePath, probe) {
-  const manifest = job.manifest;
-  const support = inspectSupport(manifest);
-  if (support.blocking.length) {
-    const error = new Error('Manifest contains Worker V1 unsupported features.');
-    error.code = 'UNSUPPORTED_FEATURE';
-    error.details = support;
-    throw error;
-  }
+function lowMemoryFfmpegBaseArgs() {
+  return [
+    '-hide_banner',
+    '-y',
+    '-threads', process.env.FFMPEG_THREADS || '1',
+    '-filter_threads', process.env.FFMPEG_FILTER_THREADS || '1',
+    '-filter_complex_threads', process.env.FFMPEG_FILTER_THREADS || '1'
+  ];
+}
 
-  const { width, height, aspect } = chooseOutputSize(manifest);
-  const fps = 30;
-  const clips = manifest.timeline.clips;
+function lowMemoryVideoEncoderArgs() {
+  return [
+    '-c:v', 'libx264',
+    '-preset', process.env.FFMPEG_PRESET || 'ultrafast',
+    '-crf', process.env.FFMPEG_CRF || '23',
+    '-threads:v', process.env.FFMPEG_THREADS || '1',
+    '-pix_fmt', 'yuv420p'
+  ];
+}
+
+function lowMemoryAudioEncoderArgs() {
+  return [
+    '-c:a', 'aac',
+    '-b:a', process.env.AUDIO_BITRATE || '128k',
+    '-ar', '48000',
+    '-ac', '2'
+  ];
+}
+
+function videoFilterChain(clip, previousClip, duration, width, height, fps) {
+  const inS = n(clip?.source?.inSeconds);
+  const outS = n(clip?.source?.outSeconds);
+
+  return [
+    `trim=start=${inS.toFixed(6)}:end=${outS.toFixed(6)}`,
+    'setpts=PTS-STARTPTS',
+    `scale=${width}:${height}:force_original_aspect_ratio=increase`,
+    `crop=${width}:${height}`,
+    `fps=${fps}`,
+    'setsar=1',
+    ...colorFilters(clip),
+    ...videoFadeFilters(clip, previousClip, duration),
+    'format=yuv420p'
+  ];
+}
+
+async function renderClipSegment({
+  clip,
+  previousClip,
+  index,
+  sourcePath,
+  probe,
+  workDir,
+  width,
+  height,
+  fps
+}) {
+  const inS = n(clip?.source?.inSeconds);
+  const outS = n(clip?.source?.outSeconds);
+  const duration = Math.max(0.001, outS - inS);
+  const segmentPath = path.join(workDir, `segment-${String(index).padStart(3, '0')}.mp4`);
+
   const filters = [];
-  const videoLabels = [];
-  const audioLabels = [];
+  const args = [
+    ...lowMemoryFfmpegBaseArgs(),
+    '-i', sourcePath
+  ];
 
-  for (let i = 0; i < clips.length; i++) {
-    const clip = clips[i];
-    const previous = i > 0 ? clips[i - 1] : null;
-    const inS = n(clip?.source?.inSeconds);
-    const outS = n(clip?.source?.outSeconds);
-    const duration = Math.max(0.001, outS - inS);
-    const vf = [
-      `trim=start=${inS.toFixed(6)}:end=${outS.toFixed(6)}`,
-      'setpts=PTS-STARTPTS',
-      `scale=${width}:${height}:force_original_aspect_ratio=increase`,
-      `crop=${width}:${height}`,
-      `fps=${fps}`,
-      'setsar=1',
-      ...colorFilters(clip),
-      ...videoFadeFilters(clip, previous, duration),
-      'format=yuv420p'
-    ];
-    const vLabel = `v${i}`;
-    filters.push(`[0:v]${vf.join(',')}[${vLabel}]`);
-    videoLabels.push(`[${vLabel}]`);
+  filters.push(`[0:v]${videoFilterChain(clip, previousClip, duration, width, height, fps).join(',')}[vout]`);
 
-    if (probe.hasAudio) {
-      const af = audioFilters(clip, duration, true);
-      const aLabel = `a${i}`;
-      filters.push(`[0:a]${af.filters.join(',')}[${aLabel}]`);
-      audioLabels.push(`[${aLabel}]`);
-    } else {
-      const aLabel = `a${i}`;
-      filters.push(`anullsrc=r=48000:cl=stereo:d=${duration.toFixed(6)}[${aLabel}]`);
-      audioLabels.push(`[${aLabel}]`);
-    }
+  if (probe.hasAudio) {
+    const af = audioFilters(clip, duration, true);
+    filters.push(`[0:a]${af.filters.join(',')}[aout]`);
+  } else {
+    args.push(
+      '-f', 'lavfi',
+      '-t', duration.toFixed(6),
+      '-i', 'anullsrc=r=48000:cl=stereo'
+    );
+    filters.push(`[1:a]atrim=duration=${duration.toFixed(6)},asetpts=PTS-STARTPTS[aout]`);
   }
 
-  const concatInputs = clips.map((_, i) => `[v${i}][a${i}]`).join('');
-  filters.push(`${concatInputs}concat=n=${clips.length}:v=1:a=1[vbase][abase]`);
+  args.push(
+    '-filter_complex', filters.join(';'),
+    '-map', '[vout]',
+    '-map', '[aout]',
+    ...lowMemoryVideoEncoderArgs(),
+    ...lowMemoryAudioEncoderArgs(),
+    '-t', duration.toFixed(6),
+    '-movflags', '+faststart',
+    segmentPath
+  );
 
-  let finalVideo = 'vbase';
+  const stderrTail = [];
+  await runProcess('ffmpeg', args, {
+    cwd: workDir,
+    captureLimit: 512_000,
+    onStderr(chunk) {
+      stderrTail.push(chunk);
+      if (stderrTail.length > 12) stderrTail.shift();
+    }
+  });
+
+  return {
+    segmentPath,
+    duration,
+    stderrTail: stderrTail.join('').slice(-8000)
+  };
+}
+
+function concatFileLine(filePath) {
+  return `file '${String(filePath).replace(/'/g, "'\\''")}'`;
+}
+
+async function concatSegments(segmentPaths, workDir) {
+  const concatList = path.join(workDir, 'concat.txt');
+  const concatPath = path.join(workDir, 'concatenated.mp4');
+
+  await writeFile(
+    concatList,
+    segmentPaths.map(concatFileLine).join('\n') + '\n',
+    'utf8'
+  );
+
+  await runProcess('ffmpeg', [
+    ...lowMemoryFfmpegBaseArgs(),
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', concatList,
+    '-c', 'copy',
+    '-movflags', '+faststart',
+    concatPath
+  ], {
+    cwd: workDir,
+    captureLimit: 512_000
+  });
+
+  return concatPath;
+}
+
+async function applyFinalOverlays(basePath, outputPath, overlays, timelineDuration, workDir, height) {
+  if (!Array.isArray(overlays) || overlays.length === 0) {
+    await copyFile(basePath, outputPath);
+    return [];
+  }
+
+  const filters = [];
   const overlayFiles = [];
-  const overlays = manifest.overlays || [];
+  let current = '0:v';
+
   for (let i = 0; i < overlays.length; i++) {
     const overlay = overlays[i];
     const textPath = path.join(workDir, `overlay-${i}.txt`);
     await writeFile(textPath, String(overlay.text || ''), 'utf8');
     overlayFiles.push(textPath);
+
     const next = `vov${i}`;
     const x = `(w-text_w)*${(clamp(n(overlay.xPercent), 0, 100) / 100).toFixed(8)}`;
     const y = `(h-text_h)*${(clamp(n(overlay.yPercent), 0, 100) / 100).toFixed(8)}`;
     const fontSize = Math.max(8, n(overlay.fontSizePx, 16) * height / 640);
     const start = Math.max(0, n(overlay.startSeconds, 0));
-    const end = Math.max(start, n(overlay.endSeconds, manifest.timeline.durationSeconds));
-    filters.push(`[${finalVideo}]drawtext=textfile='${ffPath(textPath)}':fontcolor=white:fontsize=${fontSize.toFixed(3)}:x='${x}':y='${y}':shadowcolor=black@0.75:shadowx=0:shadowy=2:enable='between(t,${start.toFixed(6)},${end.toFixed(6)})'[${next}]`);
-    finalVideo = next;
+    const end = Math.max(start, n(overlay.endSeconds, timelineDuration));
+
+    filters.push(
+      `[${current}]drawtext=` +
+      `textfile='${ffPath(textPath)}':` +
+      `fontcolor=white:` +
+      `fontsize=${fontSize.toFixed(3)}:` +
+      `x='${x}':y='${y}':` +
+      `shadowcolor=black@0.75:shadowx=0:shadowy=2:` +
+      `enable='between(t,${start.toFixed(6)},${end.toFixed(6)})'` +
+      `[${next}]`
+    );
+
+    current = next;
   }
 
-  const filterComplex = filters.join(';');
-  const args = [
-    '-hide_banner', '-y',
-    '-i', sourcePath,
-    '-filter_complex', filterComplex,
-    '-map', `[${finalVideo}]`,
-    '-map', '[abase]',
-    '-c:v', 'libx264',
-    '-preset', process.env.FFMPEG_PRESET || 'veryfast',
-    '-crf', process.env.FFMPEG_CRF || '20',
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac',
-    '-b:a', process.env.AUDIO_BITRATE || '192k',
+  await runProcess('ffmpeg', [
+    ...lowMemoryFfmpegBaseArgs(),
+    '-i', basePath,
+    '-filter_complex', filters.join(';'),
+    '-map', `[${current}]`,
+    '-map', '0:a?',
+    ...lowMemoryVideoEncoderArgs(),
+    '-c:a', 'copy',
     '-movflags', '+faststart',
-    '-shortest'
-  ];
+    outputPath
+  ], {
+    cwd: workDir,
+    captureLimit: 512_000
+  });
+
+  return overlayFiles;
+}
+
+export async function buildFfmpegPlan(job, workDir, sourcePath, probe) {
+  const manifest = job.manifest;
+  const support = inspectSupport(manifest);
+
+  if (support.blocking.length) {
+    const error = new Error('Manifest contains Worker V116B unsupported features.');
+    error.code = 'UNSUPPORTED_FEATURE';
+    error.details = support;
+    throw error;
+  }
+
+  const output = chooseOutputSize(manifest);
 
   return {
-    output: { width, height, aspect, fps },
+    output: {
+      ...output,
+      fps: 30
+    },
     support,
-    filterComplex,
-    args,
-    overlayFiles
+    mode: 'sequential-low-memory',
+    clips: manifest.timeline.clips.length,
+    overlays: (manifest.overlays || []).length
   };
 }
 
 export async function renderJob(job, options = {}) {
   const validation = validateJob(job);
+
   if (!validation.ok) {
     const error = new Error('Invalid OLIVIA render job.');
     error.code = 'INVALID_JOB';
@@ -353,39 +509,74 @@ export async function renderJob(job, options = {}) {
 
   const outputDir = options.outputDir || process.env.OUTPUT_DIR || '/data/outputs';
   const tempRoot = options.tempRoot || process.env.TEMP_DIR || '/tmp/olivia-render';
+
   await mkdir(outputDir, { recursive: true });
   await mkdir(tempRoot, { recursive: true });
 
   const jobId = safeId(job.jobId || `job-${Date.now()}`);
   const workDir = path.join(tempRoot, `${jobId}-${Math.random().toString(36).slice(2, 8)}`);
   await mkdir(workDir, { recursive: true });
+
   const sourcePath = path.join(workDir, 'source-media');
   const outputPath = path.join(outputDir, `${jobId}.mp4`);
 
   try {
-    const maxSourceBytes = n(process.env.MAX_SOURCE_BYTES, 2_000_000_000);
-    const download = await downloadSource(job.manifest.source.url, sourcePath, maxSourceBytes);
-    const probe = await probeSource(sourcePath);
-    if (!probe.hasVideo) throw new Error('Downloaded source has no video stream.');
-    const plan = await buildFfmpegPlan(job, workDir, sourcePath, probe);
+    const maxSourceBytes = n(process.env.MAX_SOURCE_BYTES, 1_000_000_000);
+    await downloadSource(job.manifest.source.url, sourcePath, maxSourceBytes);
 
-    const stderrTail = [];
-    await runProcess('ffmpeg', [...plan.args, outputPath], {
-      cwd: workDir,
-      onStderr(chunk) {
-        stderrTail.push(chunk);
-        if (stderrTail.length > 30) stderrTail.shift();
-      }
-    });
+    const probe = await probeSource(sourcePath);
+    if (!probe.hasVideo) {
+      throw new Error('Downloaded source has no video stream.');
+    }
+
+    const plan = await buildFfmpegPlan(job, workDir, sourcePath, probe);
+    const { width, height, aspect, fps } = plan.output;
+    const clips = job.manifest.timeline.clips;
+    const segmentPaths = [];
+    const ffmpegLogTail = [];
+
+    // Critical V116B memory change:
+    // Render ONE clip at a time. Never fan one decoder into all clip branches.
+    for (let i = 0; i < clips.length; i++) {
+      const segment = await renderClipSegment({
+        clip: clips[i],
+        previousClip: i > 0 ? clips[i - 1] : null,
+        index: i,
+        sourcePath,
+        probe,
+        workDir,
+        width,
+        height,
+        fps
+      });
+
+      segmentPaths.push(segment.segmentPath);
+      if (segment.stderrTail) ffmpegLogTail.push(segment.stderrTail);
+    }
+
+    const concatenatedPath = await concatSegments(segmentPaths, workDir);
+
+    await applyFinalOverlays(
+      concatenatedPath,
+      outputPath,
+      job.manifest.overlays || [],
+      n(job.manifest?.timeline?.durationSeconds, 0),
+      workDir,
+      height
+    );
 
     return {
       schema: 'OLIVIA_RENDER_RESULT_V1',
+      worker: 'V116B-LOW-MEM-ASYNC',
       jobId: job.jobId,
       status: 'completed',
       outputPath,
-      output: plan.output,
-      warnings: plan.support.warnings,
-      ffmpegLogTail: stderrTail.join('').slice(-12000)
+      output: { width, height, aspect, fps },
+      warnings: [
+        ...plan.support.warnings,
+        'V116B low-memory test mode renders maximum 720p-class output and uses sequential clip passes.'
+      ],
+      ffmpegLogTail: ffmpegLogTail.join('\n').slice(-12000)
     };
   } finally {
     if (String(process.env.KEEP_TEMP || '').toLowerCase() !== 'true') {
@@ -393,3 +584,4 @@ export async function renderJob(job, options = {}) {
     }
   }
 }
+
