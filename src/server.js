@@ -1,4 +1,3 @@
-
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
@@ -18,6 +17,12 @@ function publicOutputUrl(filename) {
   return PUBLIC_BASE_URL
     ? `${PUBLIC_BASE_URL}/outputs/${filename}`
     : `/outputs/${filename}`;
+}
+
+function publicDownloadUrl(filename) {
+  return PUBLIC_BASE_URL
+    ? `${PUBLIC_BASE_URL}/download/${filename}`
+    : `/download/${filename}`;
 }
 
 function publicStatusUrl(jobId) {
@@ -48,9 +53,11 @@ async function runRenderInBackground(job) {
     state.completedAt = new Date().toISOString();
     state.elapsedMs = Date.now() - started;
     state.outputUrl = publicOutputUrl(filename);
+    state.downloadUrl = publicDownloadUrl(filename);
     state.result = {
       ...result,
       outputUrl: state.outputUrl,
+      downloadUrl: state.downloadUrl,
       elapsedMs: state.elapsedMs
     };
     delete state.result.outputPath;
@@ -120,6 +127,24 @@ async function serveOutput(req, res, pathname) {
   }
 }
 
+async function serveDownload(req, res, pathname) {
+  const name = path.basename(pathname.slice('/download/'.length));
+  if (!/^[a-zA-Z0-9._-]+\.mp4$/.test(name)) return json(res, 400, { error: 'Invalid output name.' });
+  const filePath = path.join(OUTPUT_DIR, name);
+  try {
+    const info = await stat(filePath);
+    res.writeHead(200, {
+      'content-type': 'video/mp4',
+      'content-length': info.size,
+      'content-disposition': `attachment; filename="${name}"`,
+      'cache-control': 'private, no-store'
+    });
+    createReadStream(filePath).pipe(res);
+  } catch {
+    json(res, 404, { error: 'Output not found.' });
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -128,13 +153,17 @@ const server = http.createServer(async (req, res) => {
     return json(res, version ? 200 : 503, {
       ok: Boolean(version),
       service: 'olivia-render-worker',
-      worker: 'V116B-LOW-MEM-ASYNC',
+      worker: 'V118-DOWNLOAD',
       ffmpeg: version
     });
   }
 
   if (req.method === 'GET' && url.pathname.startsWith('/outputs/')) {
     return serveOutput(req, res, url.pathname);
+  }
+
+  if (req.method === 'GET' && url.pathname.startsWith('/download/')) {
+    return serveDownload(req, res, url.pathname);
   }
 
   if (!authorized(req)) return json(res, 401, { error: 'Unauthorized.' });
@@ -199,6 +228,7 @@ const server = http.createServer(async (req, res) => {
         startedAt: null,
         completedAt: null,
         outputUrl: null,
+        downloadUrl: null,
         error: null,
         code: null,
         details: null,
@@ -249,6 +279,7 @@ const server = http.createServer(async (req, res) => {
       startedAt: state.startedAt,
       completedAt: state.completedAt,
       outputUrl: state.outputUrl,
+      downloadUrl: state.downloadUrl,
       error: state.error,
       code: state.code,
       details: state.details,
@@ -263,7 +294,8 @@ const server = http.createServer(async (req, res) => {
       const job = await readJson(req);
       const result = await renderJob(job, { outputDir: OUTPUT_DIR });
       const filename = path.basename(result.outputPath);
-      result.outputUrl = PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/outputs/${filename}` : `/outputs/${filename}`;
+      result.outputUrl = publicOutputUrl(filename);
+      result.downloadUrl = publicDownloadUrl(filename);
       result.elapsedMs = Date.now() - started;
       delete result.outputPath;
       return json(res, 200, result);
