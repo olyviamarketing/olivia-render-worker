@@ -36,6 +36,21 @@ function safeJobId(job) {
   return raw || `olivia-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,10)}`;
 }
 
+function normaliseProgress(value, fallback = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function updateJobProgress(state, value, phase, detail = null) {
+  if (!state) return;
+  const next = normaliseProgress(value, state.progress || 0);
+  if (next >= (state.progress || 0)) state.progress = next;
+  if (phase) state.phase = String(phase);
+  if (detail !== undefined) state.progressDetail = detail;
+  state.updatedAt = new Date().toISOString();
+}
+
 async function runRenderInBackground(job) {
   const jobId = safeJobId(job);
   const state = renderJobs.get(jobId);
@@ -43,13 +58,20 @@ async function runRenderInBackground(job) {
 
   state.status = 'processing';
   state.startedAt = new Date().toISOString();
+  updateJobProgress(state, 1, 'preparing');
 
   try {
     const started = Date.now();
-    const result = await renderJob(job, { outputDir: OUTPUT_DIR });
+    const result = await renderJob(job, {
+      outputDir: OUTPUT_DIR,
+      onProgress(progress, phase, detail) {
+        updateJobProgress(state, progress, phase, detail);
+      }
+    });
     const filename = path.basename(result.outputPath);
 
     state.status = 'completed';
+    updateJobProgress(state, 100, 'completed');
     state.completedAt = new Date().toISOString();
     state.elapsedMs = Date.now() - started;
     state.outputUrl = publicOutputUrl(filename);
@@ -64,6 +86,8 @@ async function runRenderInBackground(job) {
   } catch (error) {
     console.error('[OLIVIA ASYNC RENDER ERROR]', error);
     state.status = 'failed';
+    state.phase = 'failed';
+    state.updatedAt = new Date().toISOString();
     state.completedAt = new Date().toISOString();
     state.error = error.message;
     state.code = error.code || 'RENDER_FAILED';
@@ -153,7 +177,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, version ? 200 : 503, {
       ok: Boolean(version),
       service: 'olivia-render-worker',
-      worker: 'V118-DOWNLOAD',
+      worker: 'V119-TRUE-PROGRESS',
       ffmpeg: version
     });
   }
@@ -216,6 +240,8 @@ const server = http.createServer(async (req, res) => {
           schema: 'OLIVIA_RENDER_ACCEPTED_V1',
           jobId,
           status: existing.status,
+          progress: existing.progress ?? 0,
+          phase: existing.phase || existing.status,
           statusUrl: publicStatusUrl(jobId),
           duplicate: true
         });
@@ -224,6 +250,10 @@ const server = http.createServer(async (req, res) => {
       renderJobs.set(jobId, {
         jobId,
         status: 'queued',
+        progress: 0,
+        phase: 'queued',
+        progressDetail: null,
+        updatedAt: new Date().toISOString(),
         queuedAt: new Date().toISOString(),
         startedAt: null,
         completedAt: null,
@@ -247,6 +277,8 @@ const server = http.createServer(async (req, res) => {
         schema: 'OLIVIA_RENDER_ACCEPTED_V1',
         jobId,
         status: 'queued',
+        progress: 0,
+        phase: 'queued',
         statusUrl: publicStatusUrl(jobId)
       });
     } catch (error) {
@@ -275,6 +307,10 @@ const server = http.createServer(async (req, res) => {
       schema: 'OLIVIA_RENDER_STATUS_V1',
       jobId,
       status: state.status,
+      progress: state.progress ?? 0,
+      phase: state.phase || state.status,
+      progressDetail: state.progressDetail || null,
+      updatedAt: state.updatedAt || null,
       queuedAt: state.queuedAt,
       startedAt: state.startedAt,
       completedAt: state.completedAt,
