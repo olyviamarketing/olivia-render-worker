@@ -33,6 +33,27 @@ function escapeExprString(value) {
   return String(value).replace(/'/g, "\\'");
 }
 
+function parseFfmpegTimeSeconds(text) {
+  const input = String(text || '');
+  const re = /time=(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)/g;
+  let match;
+  let latest = null;
+  while ((match = re.exec(input)) !== null) {
+    latest = Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+  }
+  return Number.isFinite(latest) ? latest : null;
+}
+
+function emitProgress(onProgress, progress, phase, detail = null) {
+  if (typeof onProgress !== 'function') return;
+  const value = clamp(Math.round(n(progress, 0)), 0, 99);
+  try {
+    onProgress(value, phase, detail);
+  } catch {
+    // Progress reporting must never be allowed to fail a render.
+  }
+}
+
 export function validateJob(job) {
   const errors = [];
   if (!job || typeof job !== 'object') errors.push('Request body must be an object.');
@@ -160,7 +181,7 @@ export async function probeSource(sourcePath) {
   };
 }
 
-export async function downloadSource(url, destination, maxBytes = 2_000_000_000) {
+export async function downloadSource(url, destination, maxBytes = 2_000_000_000, onProgress = null) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
@@ -176,6 +197,9 @@ export async function downloadSource(url, destination, maxBytes = 2_000_000_000)
           const { done, value } = await reader.read();
           if (done) return this.push(null);
           received += value.byteLength;
+          if (length > 0 && typeof onProgress === 'function') {
+            onProgress(clamp(received / length, 0, 1));
+          }
           if (received > maxBytes) {
             controller.abort();
             return this.destroy(new Error(`Source exceeded MAX_SOURCE_BYTES (${maxBytes}).`));
@@ -187,6 +211,7 @@ export async function downloadSource(url, destination, maxBytes = 2_000_000_000)
       }
     });
     await pipeline(stream, createWriteStream(destination));
+    if (typeof onProgress === 'function') onProgress(1);
     return { bytes: received, contentType: response.headers.get('content-type') || '' };
   } finally {
     clearTimeout(timeout);
@@ -342,7 +367,8 @@ async function renderClipSegment({
   workDir,
   width,
   height,
-  fps
+  fps,
+  onProgress = null
 }) {
   const inS = n(clip?.source?.inSeconds);
   const outS = n(clip?.source?.outSeconds);
@@ -381,14 +407,29 @@ async function renderClipSegment({
   );
 
   const stderrTail = [];
+  let progressBuffer = '';
+  let lastFraction = -1;
   await runProcess('ffmpeg', args, {
     cwd: workDir,
     captureLimit: 512_000,
     onStderr(chunk) {
       stderrTail.push(chunk);
       if (stderrTail.length > 12) stderrTail.shift();
+
+      if (typeof onProgress === 'function') {
+        progressBuffer = (progressBuffer + chunk).slice(-1600);
+        const seconds = parseFfmpegTimeSeconds(progressBuffer);
+        if (seconds !== null) {
+          const fraction = clamp(seconds / duration, 0, 1);
+          if (fraction >= lastFraction + 0.005 || fraction >= 0.999) {
+            lastFraction = fraction;
+            onProgress(fraction);
+          }
+        }
+      }
     }
   });
+  if (typeof onProgress === 'function') onProgress(1);
 
   return {
     segmentPath,
@@ -427,9 +468,10 @@ async function concatSegments(segmentPaths, workDir) {
   return concatPath;
 }
 
-async function applyFinalOverlays(basePath, outputPath, overlays, timelineDuration, workDir, height) {
+async function applyFinalOverlays(basePath, outputPath, overlays, timelineDuration, workDir, height, onProgress = null) {
   if (!Array.isArray(overlays) || overlays.length === 0) {
     await copyFile(basePath, outputPath);
+    if (typeof onProgress === 'function') onProgress(1);
     return [];
   }
 
@@ -464,6 +506,10 @@ async function applyFinalOverlays(basePath, outputPath, overlays, timelineDurati
     current = next;
   }
 
+  let progressBuffer = '';
+  let lastFraction = -1;
+  const safeDuration = Math.max(0.001, n(timelineDuration, 0));
+
   await runProcess('ffmpeg', [
     ...lowMemoryFfmpegBaseArgs(),
     '-i', basePath,
@@ -476,9 +522,22 @@ async function applyFinalOverlays(basePath, outputPath, overlays, timelineDurati
     outputPath
   ], {
     cwd: workDir,
-    captureLimit: 512_000
+    captureLimit: 512_000,
+    onStderr(chunk) {
+      if (typeof onProgress !== 'function') return;
+      progressBuffer = (progressBuffer + chunk).slice(-1600);
+      const seconds = parseFfmpegTimeSeconds(progressBuffer);
+      if (seconds !== null) {
+        const fraction = clamp(seconds / safeDuration, 0, 1);
+        if (fraction >= lastFraction + 0.005 || fraction >= 0.999) {
+          lastFraction = fraction;
+          onProgress(fraction);
+        }
+      }
+    }
   });
 
+  if (typeof onProgress === 'function') onProgress(1);
   return overlayFiles;
 }
 
@@ -531,23 +590,52 @@ export async function renderJob(job, options = {}) {
   const outputPath = path.join(outputDir, `${jobId}.mp4`);
 
   try {
-    const maxSourceBytes = n(process.env.MAX_SOURCE_BYTES, 1_000_000_000);
-    await downloadSource(job.manifest.source.url, sourcePath, maxSourceBytes);
+    const onProgress = options.onProgress;
+    emitProgress(onProgress, 1, 'preparing');
 
+    const maxSourceBytes = n(process.env.MAX_SOURCE_BYTES, 1_000_000_000);
+    emitProgress(onProgress, 2, 'downloading');
+    await downloadSource(
+      job.manifest.source.url,
+      sourcePath,
+      maxSourceBytes,
+      fraction => emitProgress(onProgress, 2 + fraction * 6, 'downloading')
+    );
+
+    emitProgress(onProgress, 8, 'probing');
     const probe = await probeSource(sourcePath);
     if (!probe.hasVideo) {
       throw new Error('Downloaded source has no video stream.');
     }
 
+    emitProgress(onProgress, 10, 'planning');
     const plan = await buildFfmpegPlan(job, workDir, sourcePath, probe);
     const { width, height, aspect, fps } = plan.output;
     const clips = job.manifest.timeline.clips;
     const segmentPaths = [];
     const ffmpegLogTail = [];
 
-    // Critical V116B memory change:
+    const clipDurations = clips.map(clip =>
+      Math.max(0.001, n(clip?.source?.outSeconds) - n(clip?.source?.inSeconds))
+    );
+    const totalClipDuration = Math.max(
+      0.001,
+      clipDurations.reduce((sum, duration) => sum + duration, 0)
+    );
+    let completedClipDuration = 0;
+
+    emitProgress(onProgress, 12, 'rendering_clips', {
+      clip: 0,
+      totalClips: clips.length
+    });
+
+    // Critical low-memory behavior:
     // Render ONE clip at a time. Never fan one decoder into all clip branches.
     for (let i = 0; i < clips.length; i++) {
+      const clipDuration = clipDurations[i];
+      const clipStartProgress = 12 + (completedClipDuration / totalClipDuration) * 70;
+      const clipSpan = (clipDuration / totalClipDuration) * 70;
+
       const segment = await renderClipSegment({
         clip: clips[i],
         previousClip: i > 0 ? clips[i - 1] : null,
@@ -557,14 +645,30 @@ export async function renderJob(job, options = {}) {
         workDir,
         width,
         height,
-        fps
+        fps,
+        onProgress: fraction => emitProgress(
+          onProgress,
+          clipStartProgress + clipSpan * clamp(fraction, 0, 1),
+          'rendering_clips',
+          { clip: i + 1, totalClips: clips.length }
+        )
       });
+
+      completedClipDuration += clipDuration;
+      emitProgress(
+        onProgress,
+        12 + (completedClipDuration / totalClipDuration) * 70,
+        'rendering_clips',
+        { clip: i + 1, totalClips: clips.length }
+      );
 
       segmentPaths.push(segment.segmentPath);
       if (segment.stderrTail) ffmpegLogTail.push(segment.stderrTail);
     }
 
+    emitProgress(onProgress, 83, 'concatenating');
     const concatenatedPath = await concatSegments(segmentPaths, workDir);
+    emitProgress(onProgress, 86, 'finalizing');
 
     await applyFinalOverlays(
       concatenatedPath,
@@ -572,19 +676,26 @@ export async function renderJob(job, options = {}) {
       job.manifest.overlays || [],
       n(job.manifest?.timeline?.durationSeconds, 0),
       workDir,
-      height
+      height,
+      fraction => emitProgress(
+        onProgress,
+        86 + clamp(fraction, 0, 1) * 12,
+        'finalizing'
+      )
     );
+
+    emitProgress(onProgress, 99, 'finalizing');
 
     return {
       schema: 'OLIVIA_RENDER_RESULT_V1',
-      worker: 'V116B-LOW-MEM-ASYNC',
+      worker: 'V119-TRUE-PROGRESS',
       jobId: job.jobId,
       status: 'completed',
       outputPath,
       output: { width, height, aspect, fps },
       warnings: [
         ...plan.support.warnings,
-        'V116B low-memory test mode renders maximum 720p-class output and uses sequential clip passes.'
+        'V119 low-memory mode renders maximum 720p-class output, uses sequential clip passes, and reports true FFmpeg progress.'
       ],
       ffmpegLogTail: ffmpegLogTail.join('\n').slice(-12000)
     };
