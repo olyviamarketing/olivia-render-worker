@@ -177,7 +177,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, version ? 200 : 503, {
       ok: Boolean(version),
       service: 'olivia-render-worker',
-      worker: 'V122-OVERLAY-GEOMETRY',
+      worker: 'V126-TEXT-WRAP',
       ffmpeg: version
     });
   }
