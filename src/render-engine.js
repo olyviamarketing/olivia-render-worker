@@ -486,8 +486,41 @@ async function applyFinalOverlays(basePath, outputPath, overlays, timelineDurati
     overlayFiles.push(textPath);
 
     const next = `vov${i}`;
-    const x = `(w-text_w)*${(clamp(n(overlay.xPercent), 0, 100) / 100).toFixed(8)}`;
-    const y = `(h-text_h)*${(clamp(n(overlay.yPercent), 0, 100) / 100).toFixed(8)}`;
+
+    /*
+      V122 overlay geometry contract
+
+      The editor stores xPercent/yPercent as the overlay BOX top-left,
+      measured directly against the preview/output frame. widthPercent is
+      the box width. The browser text is centered horizontally inside that
+      box (text-align:center).
+
+      Previous worker code incorrectly treated xPercent/yPercent as a
+      percentage of the remaining free space after subtracting text size:
+        (w-text_w) * xPercent
+        (h-text_h) * yPercent
+
+      That pulls right-side overlays toward the middle/left, especially
+      when the text is wide.
+
+      Reproduce the browser geometry instead:
+        boxLeft  = frameWidth  * xPercent
+        boxTop   = frameHeight * yPercent
+        boxWidth = frameWidth  * widthPercent
+        textX    = boxLeft + (boxWidth - text_w) / 2
+        textY    = boxTop
+    */
+    const xPercent = clamp(n(overlay.xPercent), 0, 100) / 100;
+    const yPercent = clamp(n(overlay.yPercent), 0, 100) / 100;
+    const widthPercent = clamp(n(overlay.widthPercent, 0), 0, 100) / 100;
+
+    const boxLeft = `w*${xPercent.toFixed(8)}`;
+    const boxTop = `h*${yPercent.toFixed(8)}`;
+    const boxWidth = `w*${widthPercent.toFixed(8)}`;
+
+    const x = `max(0,min(w-text_w,(${boxLeft})+((${boxWidth})-text_w)/2))`;
+    const y = `max(0,min(h-text_h,${boxTop}))`;
+
     const fontSize = Math.max(8, n(overlay.fontSizePx, 16) * height / 640);
     const start = Math.max(0, n(overlay.startSeconds, 0));
     const end = Math.max(start, n(overlay.endSeconds, timelineDuration));
@@ -688,14 +721,14 @@ export async function renderJob(job, options = {}) {
 
     return {
       schema: 'OLIVIA_RENDER_RESULT_V1',
-      worker: 'V119-TRUE-PROGRESS',
+      worker: 'V122-OVERLAY-GEOMETRY',
       jobId: job.jobId,
       status: 'completed',
       outputPath,
       output: { width, height, aspect, fps },
       warnings: [
         ...plan.support.warnings,
-        'V119 low-memory mode renders maximum 720p-class output, uses sequential clip passes, and reports true FFmpeg progress.'
+        'V122 low-memory mode preserves V119 true progress and fixes browser-to-render overlay geometry mapping.'
       ],
       ffmpegLogTail: ffmpegLogTail.join('\n').slice(-12000)
     };
