@@ -471,7 +471,7 @@ async function concatSegments(segmentPaths, workDir) {
   return concatPath;
 }
 
-async function applyFinalOverlays(basePath, outputPath, overlays, timelineDuration, workDir, height, onProgress = null) {
+async function applyFinalOverlays(basePath, outputPath, overlays, timelineDuration, workDir, width, height, onProgress = null) {
   if (!Array.isArray(overlays) || overlays.length === 0) {
     await copyFile(basePath, outputPath);
     if (typeof onProgress === 'function') onProgress(1);
@@ -756,6 +756,7 @@ export async function renderJob(job, options = {}) {
       job.manifest.overlays || [],
       n(job.manifest?.timeline?.durationSeconds, 0),
       workDir,
+      width,
       height,
       fraction => emitProgress(
         onProgress,
@@ -768,7 +769,7 @@ export async function renderJob(job, options = {}) {
 
     return {
       schema: 'OLIVIA_RENDER_RESULT_V1',
-      worker: 'V126-TEXT-WRAP',
+      worker: 'V127-TEXT-WRAP-RUNTIME-FIX',
       jobId: job.jobId,
       status: 'completed',
       outputPath,
