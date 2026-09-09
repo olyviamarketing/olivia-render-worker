@@ -114,8 +114,11 @@ export function inspectSupport(manifest) {
 
   const overlays = manifest?.overlays || [];
   for (const overlay of overlays) {
-    if (String(overlay.text || '').includes('\n')) {
-      warnings.push(`Overlay ${overlay.id || '?'} is multiline; V1 drawtext wrapping may differ from the browser preview.`);
+    if (
+      String(overlay.text || '').includes('\n') &&
+      !Array.isArray(overlay.renderLines)
+    ) {
+      warnings.push(`Overlay ${overlay.id || '?'} is multiline but has no browser wrap metadata; fallback rendering may differ.`);
     }
   }
 
@@ -481,62 +484,106 @@ async function applyFinalOverlays(basePath, outputPath, overlays, timelineDurati
 
   for (let i = 0; i < overlays.length; i++) {
     const overlay = overlays[i];
-    const textPath = path.join(workDir, `overlay-${i}.txt`);
-    await writeFile(textPath, String(overlay.text || ''), 'utf8');
-    overlayFiles.push(textPath);
 
-    const next = `vov${i}`;
-
-    /*
-      V122 overlay geometry contract
-
-      The editor stores xPercent/yPercent as the overlay BOX top-left,
-      measured directly against the preview/output frame. widthPercent is
-      the box width. The browser text is centered horizontally inside that
-      box (text-align:center).
-
-      Previous worker code incorrectly treated xPercent/yPercent as a
-      percentage of the remaining free space after subtracting text size:
-        (w-text_w) * xPercent
-        (h-text_h) * yPercent
-
-      That pulls right-side overlays toward the middle/left, especially
-      when the text is wide.
-
-      Reproduce the browser geometry instead:
-        boxLeft  = frameWidth  * xPercent
-        boxTop   = frameHeight * yPercent
-        boxWidth = frameWidth  * widthPercent
-        textX    = boxLeft + (boxWidth - text_w) / 2
-        textY    = boxTop
-    */
     const xPercent = clamp(n(overlay.xPercent), 0, 100) / 100;
     const yPercent = clamp(n(overlay.yPercent), 0, 100) / 100;
     const widthPercent = clamp(n(overlay.widthPercent, 0), 0, 100) / 100;
 
-    const boxLeft = `w*${xPercent.toFixed(8)}`;
-    const boxTop = `h*${yPercent.toFixed(8)}`;
-    const boxWidth = `w*${widthPercent.toFixed(8)}`;
+    const boxLeft = `main_w*${xPercent.toFixed(8)}`;
+    const boxTop = `main_h*${yPercent.toFixed(8)}`;
+    const boxWidth = `main_w*${widthPercent.toFixed(8)}`;
 
-    const x = `max(0,min(w-text_w,(${boxLeft})+((${boxWidth})-text_w)/2))`;
-    const y = `max(0,min(h-text_h,${boxTop}))`;
+    const editorFrameWidth = n(overlay.editorFrameWidthPx, 0);
+    const editorFrameHeight = n(overlay.editorFrameHeightPx, 0);
 
-    const fontSize = Math.max(8, n(overlay.fontSizePx, 16) * height / 640);
+    let fontScale = height / 640;
+
+    if (
+      editorFrameWidth > 0 &&
+      editorFrameHeight > 0
+    ) {
+      fontScale = Math.min(
+        width / editorFrameWidth,
+        height / editorFrameHeight
+      );
+    }
+
+    const fontSize = Math.max(
+      8,
+      n(overlay.fontSizePx, 16) * fontScale
+    );
+
+    const lineHeightMultiplier = Math.max(
+      0.8,
+      n(overlay.lineHeightMultiplier, 1.2)
+    );
+
+    const lineAdvance =
+      fontSize *
+      lineHeightMultiplier;
+
     const start = Math.max(0, n(overlay.startSeconds, 0));
     const end = Math.max(start, n(overlay.endSeconds, timelineDuration));
 
-    filters.push(
-      `[${current}]drawtext=` +
-      `textfile='${ffPath(textPath)}':` +
-      `fontcolor=white:` +
-      `fontsize=${fontSize.toFixed(3)}:` +
-      `x='${x}':y='${y}':` +
-      `shadowcolor=black@0.75:shadowx=0:shadowy=2:` +
-      `enable='between(t,${start.toFixed(6)},${end.toFixed(6)})'` +
-      `[${next}]`
-    );
+    const lines =
+      Array.isArray(overlay.renderLines) &&
+      overlay.renderLines.length > 0
+        ? overlay.renderLines.map(line => String(line ?? ''))
+        : String(overlay.text || '').split(/\r?\n/);
 
-    current = next;
+    /*
+      V126:
+      Render each browser-wrapped line separately.
+      This reproduces CSS wrapping and centers each line inside
+      the saved overlay box.
+    */
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const line = lines[lineIndex];
+
+      if (line === '') {
+        continue;
+      }
+
+      const textPath =
+        path.join(
+          workDir,
+          `overlay-${i}-line-${lineIndex}.txt`
+        );
+
+      await writeFile(
+        textPath,
+        line,
+        'utf8'
+      );
+
+      overlayFiles.push(
+        textPath
+      );
+
+      const x =
+        `max(0,min(main_w-text_w,` +
+        `(${boxLeft})+max(0,((${boxWidth})-text_w)/2)))`;
+
+      const y =
+        `max(0,min(main_h-text_h,` +
+        `(${boxTop})+${(lineAdvance * lineIndex).toFixed(3)}))`;
+
+      const next =
+        `vov${i}l${lineIndex}`;
+
+      filters.push(
+        `[${current}]drawtext=` +
+        `textfile='${ffPath(textPath)}':` +
+        `fontcolor=white:` +
+        `fontsize=${fontSize.toFixed(3)}:` +
+        `x='${x}':y='${y}':` +
+        `shadowcolor=black@0.75:shadowx=0:shadowy=2:` +
+        `enable='between(t,${start.toFixed(6)},${end.toFixed(6)})'` +
+        `[${next}]`
+      );
+
+      current = next;
+    }
   }
 
   let progressBuffer = '';
@@ -721,14 +768,14 @@ export async function renderJob(job, options = {}) {
 
     return {
       schema: 'OLIVIA_RENDER_RESULT_V1',
-      worker: 'V122-OVERLAY-GEOMETRY',
+      worker: 'V126-TEXT-WRAP',
       jobId: job.jobId,
       status: 'completed',
       outputPath,
       output: { width, height, aspect, fps },
       warnings: [
         ...plan.support.warnings,
-        'V122 low-memory mode preserves V119 true progress and fixes browser-to-render overlay geometry mapping.'
+        'V126 preserves true progress and adds exact browser-captured text wrapping for WYSIWYG overlays.'
       ],
       ffmpegLogTail: ffmpegLogTail.join('\n').slice(-12000)
     };
