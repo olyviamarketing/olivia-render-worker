@@ -158,7 +158,7 @@ async function serveOutput(req, res, pathname) {
         error: 'TikTok verification file not found.'
       });
     }
-
+  }
   // Normal OLIVIA rendered videos
   if (!/^[a-zA-Z0-9._-]+\.mp4$/.test(name)) {
     return json(res, 400, { error: 'Invalid output name.' });
