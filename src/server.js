@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createReadStream } from 'async function serveOutputnode:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { renderJob, validateJob, inspectSupport, chooseOutputSize } from './render-engine.js';
@@ -135,16 +135,48 @@ async function ffmpegVersion() {
 
 async function serveOutput(req, res, pathname) {
   const name = path.basename(pathname.slice('/outputs/'.length));
-  if (!/^[a-zA-Z0-9._-]+\.mp4$/.test(name)) return json(res, 400, { error: 'Invalid output name.' });
+
+  const tiktokVerifyFile =
+    'tiktokF53uDBD6DYx1YzQK6GvmhwU2Gz2uijSx.txt';
+
+  // TikTok URL-prefix verification file
+  if (name === tiktokVerifyFile) {
+    try {
+      const contents = await readFile(
+        new URL(`./${tiktokVerifyFile}`, import.meta.url)
+      );
+
+      res.writeHead(200, {
+        'content-type': 'text/plain; charset=utf-8',
+        'content-length': contents.length,
+        'cache-control': 'no-store'
+      });
+
+      return res.end(contents);
+    } catch {
+      return json(res, 404, {
+        error: 'TikTok verification file not found.'
+      });
+    }
+  }
+
+  // Normal OLIVIA rendered videos
+  if (!/^[a-zA-Z0-9._-]+\.mp4$/.test(name)) {
+    return json(res, 400, { error: 'Invalid output name.' });
+  }
+
   const filePath = path.join(OUTPUT_DIR, name);
+
   try {
     const info = await stat(filePath);
+
     res.writeHead(200, {
       'content-type': 'video/mp4',
       'content-length': info.size,
       'accept-ranges': 'bytes',
       'cache-control': 'private, max-age=3600'
     });
+
     createReadStream(filePath).pipe(res);
   } catch {
     json(res, 404, { error: 'Output not found.' });
