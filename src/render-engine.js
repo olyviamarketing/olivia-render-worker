@@ -35,39 +35,53 @@ function ffPath(value) {
 }
 
 function escapeExprString(value) {
-  return String(value).replace(/'/g, "\\'");
+  return String(value)
+    .replace(/'/g, "\\'");
 }
 
 export function validateJob(job) {
   const errors = [];
 
   if (!job || typeof job !== 'object') {
-    errors.push('Request body must be an object.');
+    errors.push(
+      'Request body must be an object.'
+    );
   }
 
-  if (job?.schema !== 'OLIVIA_RENDER_JOB_V1') {
-    errors.push('schema must be OLIVIA_RENDER_JOB_V1.');
+  if (
+    job?.schema !==
+    'OLIVIA_RENDER_JOB_V1'
+  ) {
+    errors.push(
+      'schema must be OLIVIA_RENDER_JOB_V1.'
+    );
   }
 
-  const m = job?.manifest;
+  const m =
+    job?.manifest;
 
   if (
     !m ||
-    m.schema !== 'OLIVIA_RENDER_MANIFEST_V1'
+    m.schema !==
+    'OLIVIA_RENDER_MANIFEST_V1'
   ) {
     errors.push(
       'manifest.schema must be OLIVIA_RENDER_MANIFEST_V1.'
     );
   }
 
-  if (!m?.source?.url) {
+  if (
+    !m?.source?.url
+  ) {
     errors.push(
       'manifest.source.url is required.'
     );
   }
 
   if (
-    !Array.isArray(m?.timeline?.clips) ||
+    !Array.isArray(
+      m?.timeline?.clips
+    ) ||
     m.timeline.clips.length === 0
   ) {
     errors.push(
@@ -76,25 +90,40 @@ export function validateJob(job) {
   }
 
   return {
-    ok: errors.length === 0,
+    ok:
+      errors.length === 0,
     errors
   };
 }
 
-export function chooseOutputSize(manifest) {
-  const aspect = String(
-    manifest?.output?.requestedAspectRatio || ''
-  ).replace(/\s/g, '');
+export function chooseOutputSize(
+  manifest
+) {
+  const aspect =
+    String(
+      manifest
+        ?.output
+        ?.requestedAspectRatio ||
+      ''
+    ).replace(
+      /\s/g,
+      ''
+    );
 
-  const longEdge = Math.max(
-    640,
-    n(
-      process.env.LOW_MEMORY_LONG_EDGE,
-      1280
-    )
-  );
+  const longEdge =
+    Math.max(
+      640,
+      n(
+        process.env
+          .LOW_MEMORY_LONG_EDGE,
+        1280
+      )
+    );
 
-  if (aspect === '9:16') {
+  if (
+    aspect ===
+    '9:16'
+  ) {
     return {
       width: 720,
       height: 1280,
@@ -102,7 +131,10 @@ export function chooseOutputSize(manifest) {
     };
   }
 
-  if (aspect === '1:1') {
+  if (
+    aspect ===
+    '1:1'
+  ) {
     return {
       width: 720,
       height: 720,
@@ -110,7 +142,10 @@ export function chooseOutputSize(manifest) {
     };
   }
 
-  if (aspect === '16:9') {
+  if (
+    aspect ===
+    '16:9'
+  ) {
     return {
       width: 1280,
       height: 720,
@@ -118,49 +153,81 @@ export function chooseOutputSize(manifest) {
     };
   }
 
-  const sourceW = Math.max(
-    2,
-    n(
-      manifest?.source?.width,
-      1280
-    )
-  );
+  const sourceW =
+    Math.max(
+      2,
+      n(
+        manifest
+          ?.source
+          ?.width,
+        1280
+      )
+    );
 
-  const sourceH = Math.max(
-    2,
-    n(
-      manifest?.source?.height,
-      720
-    )
-  );
+  const sourceH =
+    Math.max(
+      2,
+      n(
+        manifest
+          ?.source
+          ?.height,
+        720
+      )
+    );
 
-  const sourceLong = Math.max(
-    sourceW,
-    sourceH
-  );
+  const sourceLong =
+    Math.max(
+      sourceW,
+      sourceH
+    );
 
-  const scale = Math.min(
-    1,
-    longEdge / sourceLong
-  );
+  const scale =
+    Math.min(
+      1,
+      longEdge /
+      sourceLong
+    );
 
   return {
-    width: even(sourceW * scale),
-    height: even(sourceH * scale),
-    aspect: aspect || 'source'
+    width:
+      even(
+        sourceW *
+        scale
+      ),
+
+    height:
+      even(
+        sourceH *
+        scale
+      ),
+
+    aspect:
+      aspect ||
+      'source'
   };
 }
 
-export function inspectSupport(manifest) {
+export function inspectSupport(
+  manifest
+) {
   const blocking = [];
   const warnings = [];
 
   const clips =
-    manifest?.timeline?.clips || [];
+    manifest
+      ?.timeline
+      ?.clips ||
+    [];
 
-  for (const clip of clips) {
+  for (
+    const clip of
+    clips
+  ) {
     const transition =
-      clip?.video?.transitionOut?.type ||
+      clip
+        ?.video
+        ?.transitionOut
+        ?.type ||
       'none';
 
     if (
@@ -170,38 +237,32 @@ export function inspectSupport(manifest) {
         'dip-white',
         'zoom',
         'blur'
-      ].includes(transition)
+      ].includes(
+        transition
+      )
     ) {
       blocking.push(
         `Clip ${clip.clipNumber ?? clip.id}: transition '${transition}' is not supported by the OLIVIA worker.`
       );
     }
-
-    const color =
-      clip?.video?.color || {};
-
-    if (
-      Math.abs(
-        n(color.warmth)
-      ) > EPS ||
-      Math.abs(
-        n(color.tint)
-      ) > EPS
-    ) {
-      blocking.push(
-        `Clip ${clip.clipNumber ?? clip.id}: warmth/tint require Worker V2 CSS-colour matching.`
-      );
-    }
   }
 
   const overlays =
-    manifest?.overlays || [];
+    manifest
+      ?.overlays ||
+    [];
 
-  for (const overlay of overlays) {
+  for (
+    const overlay of
+    overlays
+  ) {
     if (
       String(
-        overlay.text || ''
-      ).includes('\n') &&
+        overlay.text ||
+        ''
+      ).includes(
+        '\n'
+      ) &&
       !Array.isArray(
         overlay.renderLines
       )
@@ -224,33 +285,38 @@ async function runProcess(
   {
     cwd,
     onStderr,
-    captureLimit = 2_000_000
+    captureLimit =
+      2_000_000
   } = {}
 ) {
   return new Promise(
-    (resolve, reject) => {
-      const child = spawn(
-        command,
-        args,
-        {
-          cwd,
+    (
+      resolve,
+      reject
+    ) => {
+      const child =
+        spawn(
+          command,
+          args,
+          {
+            cwd,
 
-          stdio: [
-            'ignore',
-            'pipe',
-            'pipe'
-          ],
+            stdio: [
+              'ignore',
+              'pipe',
+              'pipe'
+            ],
 
-          env: {
-            ...process.env,
+            env: {
+              ...process.env,
 
-            OMP_NUM_THREADS:
-              process.env
-                .OMP_NUM_THREADS ||
-              '1'
+              OMP_NUM_THREADS:
+                process.env
+                  .OMP_NUM_THREADS ||
+                '1'
+            }
           }
-        }
-      );
+        );
 
       let stdout = '';
       let stderr = '';
@@ -260,10 +326,13 @@ async function runProcess(
         addition
       ) {
         const next =
-          current + addition;
+          current +
+          addition;
 
-        return next.length >
+        return (
+          next.length >
           captureLimit
+        )
           ? next.slice(
               -captureLimit
             )
@@ -272,29 +341,33 @@ async function runProcess(
 
       child.stdout.on(
         'data',
-        d => {
+        data => {
           stdout =
             appendLimited(
               stdout,
-              d.toString()
+              data.toString()
             );
         }
       );
 
       child.stderr.on(
         'data',
-        d => {
-          const s =
-            d.toString();
+        data => {
+          const text =
+            data.toString();
 
           stderr =
             appendLimited(
               stderr,
-              s
+              text
             );
 
-          if (onStderr) {
-            onStderr(s);
+          if (
+            onStderr
+          ) {
+            onStderr(
+              text
+            );
           }
         }
       );
@@ -307,7 +380,9 @@ async function runProcess(
       child.on(
         'close',
         code => {
-          if (code === 0) {
+          if (
+            code === 0
+          ) {
             resolve({
               stdout,
               stderr
@@ -337,7 +412,9 @@ async function runProcess(
 export async function probeSource(
   sourcePath
 ) {
-  const { stdout } =
+  const {
+    stdout
+  } =
     await runProcess(
       'ffprobe',
       [
@@ -355,48 +432,58 @@ export async function probeSource(
     );
 
   const data =
-    JSON.parse(stdout);
+    JSON.parse(
+      stdout
+    );
 
   const streams =
-    data?.streams || [];
+    data?.streams ||
+    [];
 
   const videoStream =
     streams.find(
-      s =>
-        s.codec_type ===
+      stream =>
+        stream
+          .codec_type ===
         'video'
     );
 
   return {
     duration:
       n(
-        data?.format?.duration,
+        data
+          ?.format
+          ?.duration,
         0
       ),
 
     hasVideo:
       streams.some(
-        s =>
-          s.codec_type ===
+        stream =>
+          stream
+            .codec_type ===
           'video'
       ),
 
     hasAudio:
       streams.some(
-        s =>
-          s.codec_type ===
+        stream =>
+          stream
+            .codec_type ===
           'audio'
       ),
 
     width:
       n(
-        videoStream?.width,
+        videoStream
+          ?.width,
         0
       ),
 
     height:
       n(
-        videoStream?.height,
+        videoStream
+          ?.height,
         0
       )
   };
@@ -405,7 +492,8 @@ export async function probeSource(
 export async function downloadSource(
   url,
   destination,
-  maxBytes = 2_000_000_000
+  maxBytes =
+    2_000_000_000
 ) {
   const controller =
     new AbortController();
@@ -422,10 +510,12 @@ export async function downloadSource(
       await fetch(
         url,
         {
-          redirect: 'follow',
+          redirect:
+            'follow',
 
           signal:
-            controller.signal
+            controller
+              .signal
         }
       );
 
@@ -440,9 +530,11 @@ export async function downloadSource(
 
     const length =
       n(
-        response.headers.get(
-          'content-length'
-        ),
+        response
+          .headers
+          .get(
+            'content-length'
+          ),
         0
       );
 
@@ -458,7 +550,8 @@ export async function downloadSource(
     let received = 0;
 
     const reader =
-      response.body
+      response
+        .body
         .getReader();
 
     const stream =
@@ -471,13 +564,19 @@ export async function downloadSource(
             } =
               await reader.read();
 
-            if (done) {
-              this.push(null);
+            if (
+              done
+            ) {
+              this.push(
+                null
+              );
+
               return;
             }
 
             received +=
-              value.byteLength;
+              value
+                .byteLength;
 
             if (
               received >
@@ -499,7 +598,9 @@ export async function downloadSource(
                 value
               )
             );
-          } catch (error) {
+          } catch (
+            error
+          ) {
             this.destroy(
               error
             );
@@ -515,12 +616,16 @@ export async function downloadSource(
     );
 
     return {
-      bytes: received,
+      bytes:
+        received,
 
       contentType:
-        response.headers.get(
-          'content-type'
-        ) || ''
+        response
+          .headers
+          .get(
+            'content-type'
+          ) ||
+        ''
     };
   } finally {
     clearTimeout(
@@ -533,7 +638,9 @@ function colorFilters(
   clip
 ) {
   const c =
-    clip?.video?.color ||
+    clip
+      ?.video
+      ?.color ||
     {};
 
   const brightness =
@@ -566,6 +673,26 @@ function colorFilters(
       2
     );
 
+  const warmth =
+    clamp(
+      n(
+        c.warmth,
+        0
+      ),
+      -1,
+      1
+    );
+
+  const tint =
+    clamp(
+      n(
+        c.tint,
+        0
+      ),
+      -1,
+      1
+    );
+
   const hue =
     clamp(
       n(
@@ -578,21 +705,173 @@ function colorFilters(
 
   const filters = [];
 
+  /*
+    Existing OLIVIA
+    brightness / contrast /
+    saturation render path.
+  */
   filters.push(
     `eq=` +
     `brightness=${(
-      brightness - 1
+      brightness -
+      1
     ).toFixed(6)}:` +
     `contrast=${contrast.toFixed(6)}:` +
     `saturation=${saturation.toFixed(6)}`
   );
 
+  /*
+    =====================================================
+    WARMTH
+    =====================================================
+
+    Browser preview:
+
+    positive:
+      sepia(warmth * 0.35)
+      hue-rotate(-warmth * 12deg)
+
+    negative:
+      hue-rotate(-warmth * 18deg)
+
+    FFmpeg doesn't have CSS sepia(amount),
+    so interpolate identity with the standard
+    sepia colour matrix.
+  */
+
   if (
-    Math.abs(hue) >
+    warmth >
+    0.001
+  ) {
+    const sepia =
+      warmth *
+      0.35;
+
+    const rr =
+      1 -
+      0.607 *
+      sepia;
+
+    const rg =
+      0.769 *
+      sepia;
+
+    const rb =
+      0.189 *
+      sepia;
+
+    const gr =
+      0.349 *
+      sepia;
+
+    const gg =
+      1 -
+      0.314 *
+      sepia;
+
+    const gb =
+      0.168 *
+      sepia;
+
+    const br =
+      0.272 *
+      sepia;
+
+    const bg =
+      0.534 *
+      sepia;
+
+    const bb =
+      1 -
+      0.869 *
+      sepia;
+
+    filters.push(
+      `colorchannelmixer=` +
+
+      `rr=${rr.toFixed(6)}:` +
+      `rg=${rg.toFixed(6)}:` +
+      `rb=${rb.toFixed(6)}:` +
+
+      `gr=${gr.toFixed(6)}:` +
+      `gg=${gg.toFixed(6)}:` +
+      `gb=${gb.toFixed(6)}:` +
+
+      `br=${br.toFixed(6)}:` +
+      `bg=${bg.toFixed(6)}:` +
+      `bb=${bb.toFixed(6)}`
+    );
+
+    filters.push(
+      `hue=` +
+      `h=${(
+        -warmth *
+        12
+      ).toFixed(4)}`
+    );
+  } else if (
+    warmth <
+    -0.001
+  ) {
+    filters.push(
+      `hue=` +
+      `h=${(
+        -warmth *
+        18
+      ).toFixed(4)}`
+    );
+  }
+
+  /*
+    =====================================================
+    TINT
+    =====================================================
+
+    Browser preview:
+      hue-rotate(tint * 10deg)
+      saturate(1 + abs(tint) * 0.12)
+  */
+
+  if (
+    Math.abs(
+      tint
+    ) >
+    0.001
+  ) {
+    filters.push(
+      `hue=` +
+      `h=${(
+        tint *
+        10
+      ).toFixed(4)}`
+    );
+
+    filters.push(
+      `hue=` +
+      `s=${(
+        1 +
+        Math.abs(
+          tint
+        ) *
+        0.12
+      ).toFixed(6)}`
+    );
+  }
+
+  /*
+    User Hue comes after
+    Warmth + Tint in the editor.
+  */
+
+  if (
+    Math.abs(
+      hue
+    ) >
     EPS
   ) {
     filters.push(
-      `hue=h=${hue.toFixed(4)}`
+      `hue=` +
+      `h=${hue.toFixed(4)}`
     );
   }
 
@@ -607,7 +886,8 @@ function videoFadeFilters(
   const filters = [];
 
   const v =
-    clip?.video || {};
+    clip?.video ||
+    {};
 
   const fadeIn =
     clamp(
@@ -649,7 +929,8 @@ function videoFadeFilters(
       `t=out:` +
       `st=${Math.max(
         0,
-        duration - fadeOut
+        duration -
+        fadeOut
       ).toFixed(6)}:` +
       `d=${fadeOut.toFixed(6)}:` +
       `c=black`
@@ -661,8 +942,11 @@ function videoFadeFilters(
       ?.video
       ?.transitionOut ||
     {
-      type: 'none',
-      durationSeconds: 0
+      type:
+        'none',
+
+      durationSeconds:
+        0
     };
 
   if (
@@ -674,11 +958,13 @@ function videoFadeFilters(
     const half =
       Math.max(
         0.1,
+
         n(
           prevTransition
             .durationSeconds,
           0.8
-        ) / 2
+        ) /
+        2
       );
 
     const d =
@@ -702,10 +988,14 @@ function videoFadeFilters(
   }
 
   const ownTransition =
-    v.transitionOut ||
+    v
+      .transitionOut ||
     {
-      type: 'none',
-      durationSeconds: 0
+      type:
+        'none',
+
+      durationSeconds:
+        0
     };
 
   if (
@@ -717,11 +1007,13 @@ function videoFadeFilters(
     const half =
       Math.max(
         0.1,
+
         n(
           ownTransition
             .durationSeconds,
           0.8
-        ) / 2
+        ) /
+        2
       );
 
     const d =
@@ -735,7 +1027,8 @@ function videoFadeFilters(
       `t=out:` +
       `st=${Math.max(
         0,
-        duration - d
+        duration -
+        d
       ).toFixed(6)}:` +
       `d=${d.toFixed(6)}:` +
       `c=${
@@ -755,7 +1048,8 @@ function volumeExpression(
   duration
 ) {
   if (
-    audio?.muted === true ||
+    audio?.muted ===
+      true ||
     audio
       ?.audibleUnderSoloRule ===
       false
@@ -836,7 +1130,8 @@ function volumeExpression(
   const span =
     Math.max(
       0.001,
-      e - s
+      e -
+      s
     );
 
   return (
@@ -858,9 +1153,12 @@ function audioFilters(
   hasAudio
 ) {
   const audio =
-    clip?.audio || {};
+    clip?.audio ||
+    {};
 
-  if (!hasAudio) {
+  if (
+    !hasAudio
+  ) {
     return {
       source:
         `anullsrc=` +
@@ -868,16 +1166,19 @@ function audioFilters(
         `cl=stereo:` +
         `d=${duration.toFixed(6)}`,
 
-      lavfi: true,
+      lavfi:
+        true,
 
-      filters: []
+      filters:
+        []
     };
   }
 
   const offset =
     clamp(
       n(
-        audio.offsetSeconds,
+        audio
+          .offsetSeconds,
         0
       ),
       -10,
@@ -887,8 +1188,11 @@ function audioFilters(
   let sourceIn =
     Math.max(
       0,
+
       n(
-        audio.sourceInSeconds,
+        audio
+          .sourceInSeconds,
+
         clip
           ?.source
           ?.inSeconds
@@ -897,10 +1201,13 @@ function audioFilters(
 
   let sourceOut =
     Math.max(
-      sourceIn + 0.001,
+      sourceIn +
+      0.001,
 
       n(
-        audio.sourceOutSeconds,
+        audio
+          .sourceOutSeconds,
+
         clip
           ?.source
           ?.outSeconds
@@ -910,7 +1217,8 @@ function audioFilters(
   let delay = 0;
 
   if (
-    offset > 0
+    offset >
+    0
   ) {
     delay =
       Math.min(
@@ -918,11 +1226,14 @@ function audioFilters(
         offset
       );
   } else if (
-    offset < 0
+    offset <
+    0
   ) {
     sourceIn =
       Math.min(
-        sourceOut - 0.001,
+        sourceOut -
+        0.001,
+
         sourceIn +
         (-offset)
       );
@@ -963,7 +1274,8 @@ function audioFilters(
   ) {
     const delayMs =
       Math.round(
-        delay * 1000
+        delay *
+        1000
       );
 
     filters.push(
@@ -988,7 +1300,8 @@ function audioFilters(
   const fadeIn =
     clamp(
       n(
-        audio.fadeInSeconds
+        audio
+          .fadeInSeconds
       ),
       0,
       duration
@@ -997,7 +1310,8 @@ function audioFilters(
   const fadeOut =
     clamp(
       n(
-        audio.fadeOutSeconds
+        audio
+          .fadeOutSeconds
       ),
       0,
       duration
@@ -1078,17 +1392,23 @@ function audioFilters(
     );
 
   const leftGain =
-    pan > 0
-      ? 1 - pan
+    pan >
+    0
+      ? 1 -
+        pan
       : 1;
 
   const rightGain =
-    pan < 0
-      ? 1 + pan
+    pan <
+    0
+      ? 1 +
+        pan
       : 1;
 
   if (
-    Math.abs(pan) >
+    Math.abs(
+      pan
+    ) >
     EPS
   ) {
     filters.push(
@@ -1101,7 +1421,8 @@ function audioFilters(
   return {
     sourceIn,
     sourceOut,
-    lavfi: false,
+    lavfi:
+      false,
     filters
   };
 }
@@ -1181,7 +1502,8 @@ function transitionHalfSeconds(
       transition
         ?.durationSeconds,
       0.8
-    ) / 2
+    ) /
+    2
   );
 }
 
@@ -1193,10 +1515,15 @@ function zoomTransitionFilters(
   height
 ) {
   const ownTransition =
-    clip?.video?.transitionOut ||
+    clip
+      ?.video
+      ?.transitionOut ||
     {
-      type: 'none',
-      durationSeconds: 0
+      type:
+        'none',
+
+      durationSeconds:
+        0
     };
 
   const previousTransition =
@@ -1204,8 +1531,11 @@ function zoomTransitionFilters(
       ?.video
       ?.transitionOut ||
     {
-      type: 'none',
-      durationSeconds: 0
+      type:
+        'none',
+
+      durationSeconds:
+        0
     };
 
   if (
@@ -1249,7 +1579,8 @@ function zoomTransitionFilters(
     const start =
       Math.max(
         0,
-        duration - half
+        duration -
+        half
       );
 
     outgoingExpr =
@@ -1283,10 +1614,15 @@ function blurTransitionMixExpression(
   duration
 ) {
   const ownTransition =
-    clip?.video?.transitionOut ||
+    clip
+      ?.video
+      ?.transitionOut ||
     {
-      type: 'none',
-      durationSeconds: 0
+      type:
+        'none',
+
+      durationSeconds:
+        0
     };
 
   const previousTransition =
@@ -1294,19 +1630,15 @@ function blurTransitionMixExpression(
       ?.video
       ?.transitionOut ||
     {
-      type: 'none',
-      durationSeconds: 0
+      type:
+        'none',
+
+      durationSeconds:
+        0
     };
 
   const expressions = [];
 
-  /*
-    Incoming Blur:
-    Previous clip owns the transition.
-
-    14px blur -> 0px blur
-    over the first half.
-  */
   if (
     previousTransition.type ===
     'blur'
@@ -1322,13 +1654,6 @@ function blurTransitionMixExpression(
     );
   }
 
-  /*
-    Outgoing Blur:
-    Current clip owns the transition.
-
-    0px blur -> 14px blur
-    over the final half.
-  */
   if (
     ownTransition.type ===
     'blur'
@@ -1341,7 +1666,8 @@ function blurTransitionMixExpression(
     const start =
       Math.max(
         0,
-        duration - half
+        duration -
+        half
       );
 
     expressions.push(
@@ -1361,7 +1687,9 @@ function blurTransitionMixExpression(
     expressions.length ===
     1
   ) {
-    return expressions[0];
+    return expressions[
+      0
+    ];
   }
 
   return (
@@ -1451,7 +1779,9 @@ function buildVideoFilterGraph(
       width,
       height,
       fps
-    ).join(',');
+    ).join(
+      ','
+    );
 
   const blurMix =
     blurTransitionMixExpression(
@@ -1460,11 +1790,9 @@ function buildVideoFilterGraph(
       duration
     );
 
-  /*
-    No Blur involved:
-    keep the original low-memory path.
-  */
-  if (!blurMix) {
+  if (
+    !blurMix
+  ) {
     return [
       `[0:v]${baseChain}[vout]`
     ];
@@ -1473,17 +1801,17 @@ function buildVideoFilterGraph(
   /*
     Stable Blur implementation.
 
-    IMPORTANT:
-    There is NO sendcmd here.
+    No runtime gblur changes.
 
-    One branch stays normal.
-    One branch receives fixed 14px gblur.
-    FFmpeg blend smoothly mixes between them
-    according to transition time.
+    One branch is sharp.
+    One branch is fixed 14px blur.
+    FFmpeg blends between them.
 
-    The blurred branch is 1.03x larger to hide
-    the soft edge, matching OLIVIA preview behaviour.
+    Blur branch is also scaled
+    1.03x to hide soft edges,
+    like the editor preview.
   */
+
   const blendExpr =
     `A*(1-(${blurMix}))+` +
     `B*(${blurMix})`;
@@ -1498,18 +1826,22 @@ function buildVideoFilterGraph(
     `[vsharp][vblurpre]`,
 
     `[vblurpre]` +
+
     `scale=` +
     `w='trunc(iw*1.03/2)*2':` +
     `h='trunc(ih*1.03/2)*2',` +
+
     `crop=` +
     `${width}:` +
     `${height}:` +
     `(iw-${width})/2:` +
     `(ih-${height})/2,` +
+
     `gblur=` +
     `sigma=14:` +
     `sigmaV=14:` +
     `steps=1` +
+
     `[vblur]`,
 
     `[vsharp][vblur]` +
@@ -1547,7 +1879,8 @@ async function renderClipSegment({
   const duration =
     Math.max(
       0.001,
-      outS - inS
+      outS -
+      inS
     );
 
   const segmentPath =
@@ -1616,7 +1949,9 @@ async function renderClipSegment({
 
   args.push(
     '-filter_complex',
-    filters.join(';'),
+    filters.join(
+      ';'
+    ),
 
     '-map',
     '[vout]',
@@ -1643,12 +1978,15 @@ async function renderClipSegment({
     'ffmpeg',
     args,
     {
-      cwd: workDir,
+      cwd:
+        workDir,
 
       captureLimit:
         512_000,
 
-      onStderr(chunk) {
+      onStderr(
+        chunk
+      ) {
         stderrTail.push(
           chunk
         );
@@ -1670,7 +2008,9 @@ async function renderClipSegment({
     stderrTail:
       stderrTail
         .join('')
-        .slice(-8000)
+        .slice(
+          -8000
+        )
   };
 }
 
@@ -1679,11 +2019,12 @@ function concatFileLine(
 ) {
   return (
     `file '` +
-    String(filePath)
-      .replace(
-        /'/g,
-        "'\\''"
-      ) +
+    String(
+      filePath
+    ).replace(
+      /'/g,
+      "'\\''"
+    ) +
     `'`
   );
 }
@@ -1711,7 +2052,9 @@ async function concatSegments(
       .map(
         concatFileLine
       )
-      .join('\n') +
+      .join(
+        '\n'
+      ) +
       '\n',
 
     'utf8'
@@ -1740,7 +2083,8 @@ async function concatSegments(
       concatPath
     ],
     {
-      cwd: workDir,
+      cwd:
+        workDir,
 
       captureLimit:
         512_000
@@ -1755,25 +2099,31 @@ function overlayText(
 ) {
   if (
     Array.isArray(
-      overlay?.renderLines
+      overlay
+        ?.renderLines
     ) &&
     overlay
       .renderLines
-      .length > 0
+      .length >
+    0
   ) {
     return overlay
       .renderLines
       .map(
         line =>
           String(
-            line ?? ''
+            line ??
+            ''
           )
       )
-      .join('\n');
+      .join(
+        '\n'
+      );
   }
 
   return String(
-    overlay?.text ||
+    overlay
+      ?.text ||
     ''
   );
 }
@@ -1814,7 +2164,9 @@ async function applyFinalOverlays(
     i++
   ) {
     const overlay =
-      overlays[i];
+      overlays[
+        i
+      ];
 
     const textPath =
       path.join(
@@ -1874,6 +2226,7 @@ async function applyFinalOverlays(
     const editorFrameHeight =
       Math.max(
         1,
+
         n(
           overlay
             .editorFrameHeightPx,
@@ -1966,7 +2319,9 @@ async function applyFinalOverlays(
       basePath,
 
       '-filter_complex',
-      filters.join(';'),
+      filters.join(
+        ';'
+      ),
 
       '-map',
       `[${current}]`,
@@ -1985,7 +2340,8 @@ async function applyFinalOverlays(
       outputPath
     ],
     {
-      cwd: workDir,
+      cwd:
+        workDir,
 
       captureLimit:
         512_000
@@ -2086,8 +2442,9 @@ function reportProgress(
     );
   } catch {
     /*
-      Progress reporting may never
-      break the render itself.
+      Progress reporting
+      may never break
+      the render itself.
     */
   }
 }
@@ -2133,14 +2490,16 @@ export async function renderJob(
   await mkdir(
     outputDir,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
   await mkdir(
     tempRoot,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -2165,7 +2524,8 @@ export async function renderJob(
   await mkdir(
     workDir,
     {
-      recursive: true
+      recursive:
+        true
     }
   );
 
@@ -2249,10 +2609,6 @@ export async function renderJob(
     const segmentPaths = [];
     const ffmpegLogTail = [];
 
-    /*
-      Low-memory render:
-      render one clip at a time.
-    */
     for (
       let i = 0;
       i < clips.length;
@@ -2285,7 +2641,9 @@ export async function renderJob(
       const segment =
         await renderClipSegment({
           clip:
-            clips[i],
+            clips[
+              i
+            ],
 
           previousClip:
             i > 0
@@ -2375,7 +2733,7 @@ export async function renderJob(
         'OLIVIA_RENDER_RESULT_V1',
 
       worker:
-        'V131-STABLE-BLUR-BLEND',
+        'V132-WARMTH-TINT',
 
       jobId:
         job.jobId,
@@ -2402,7 +2760,9 @@ export async function renderJob(
 
       ffmpegLogTail:
         ffmpegLogTail
-          .join('\n')
+          .join(
+            '\n'
+          )
           .slice(
             -12000
           )
@@ -2419,8 +2779,11 @@ export async function renderJob(
       await rm(
         workDir,
         {
-          recursive: true,
-          force: true
+          recursive:
+            true,
+
+          force:
+            true
         }
       ).catch(
         () => {}
