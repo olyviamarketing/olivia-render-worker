@@ -38,16 +38,6 @@ function escapeExprString(value) {
   return String(value).replace(/'/g, "\\'");
 }
 
-function reportProgress(options, progress, phase, detail = null) {
-  if (typeof options?.onProgress !== 'function') return;
-
-  try {
-    options.onProgress(progress, phase, detail);
-  } catch {
-    // Progress reporting must never break the render itself.
-  }
-}
-
 export function validateJob(job) {
   const errors = [];
 
@@ -59,24 +49,26 @@ export function validateJob(job) {
     errors.push('schema must be OLIVIA_RENDER_JOB_V1.');
   }
 
-  const manifest = job?.manifest;
+  const m = job?.manifest;
 
   if (
-    !manifest ||
-    manifest.schema !== 'OLIVIA_RENDER_MANIFEST_V1'
+    !m ||
+    m.schema !== 'OLIVIA_RENDER_MANIFEST_V1'
   ) {
     errors.push(
       'manifest.schema must be OLIVIA_RENDER_MANIFEST_V1.'
     );
   }
 
-  if (!manifest?.source?.url) {
-    errors.push('manifest.source.url is required.');
+  if (!m?.source?.url) {
+    errors.push(
+      'manifest.source.url is required.'
+    );
   }
 
   if (
-    !Array.isArray(manifest?.timeline?.clips) ||
-    manifest.timeline.clips.length === 0
+    !Array.isArray(m?.timeline?.clips) ||
+    m.timeline.clips.length === 0
   ) {
     errors.push(
       'At least one active clip is required.'
@@ -90,47 +82,56 @@ export function validateJob(job) {
 }
 
 export function chooseOutputSize(manifest) {
-  const aspectRaw = String(
+  const aspect = String(
     manifest?.output?.requestedAspectRatio || ''
   ).replace(/\s/g, '');
 
   const longEdge = Math.max(
     640,
-    n(process.env.LOW_MEMORY_LONG_EDGE, 1280)
+    n(
+      process.env.LOW_MEMORY_LONG_EDGE,
+      1280
+    )
   );
 
-  if (aspectRaw.includes('9:16')) {
+  if (aspect === '9:16') {
     return {
       width: 720,
       height: 1280,
-      aspect: '9:16'
+      aspect
     };
   }
 
-  if (aspectRaw.includes('1:1')) {
+  if (aspect === '1:1') {
     return {
       width: 720,
       height: 720,
-      aspect: '1:1'
+      aspect
     };
   }
 
-  if (aspectRaw.includes('16:9')) {
+  if (aspect === '16:9') {
     return {
       width: 1280,
       height: 720,
-      aspect: '16:9'
+      aspect
     };
   }
 
   const sourceW = Math.max(
     2,
-    n(manifest?.source?.width, 1280)
+    n(
+      manifest?.source?.width,
+      1280
+    )
   );
 
   const sourceH = Math.max(
     2,
-    n(manifest?.source?.height, 720)
+    n(
+      manifest?.source?.height,
+      720
+    )
   );
 
   const sourceLong = Math.max(
@@ -146,7 +147,7 @@ export function chooseOutputSize(manifest) {
   return {
     width: even(sourceW * scale),
     height: even(sourceH * scale),
-    aspect: aspectRaw || 'source'
+    aspect: aspect || 'source'
   };
 }
 
@@ -180,8 +181,12 @@ export function inspectSupport(manifest) {
       clip?.video?.color || {};
 
     if (
-      Math.abs(n(color.warmth)) > EPS ||
-      Math.abs(n(color.tint)) > EPS
+      Math.abs(
+        n(color.warmth)
+      ) > EPS ||
+      Math.abs(
+        n(color.tint)
+      ) > EPS
     ) {
       blocking.push(
         `Clip ${clip.clipNumber ?? clip.id}: warmth/tint require Worker V2 CSS-colour matching.`
@@ -229,13 +234,16 @@ async function runProcess(
         args,
         {
           cwd,
+
           stdio: [
             'ignore',
             'pipe',
             'pipe'
           ],
+
           env: {
             ...process.env,
+
             OMP_NUM_THREADS:
               process.env
                 .OMP_NUM_THREADS ||
@@ -264,29 +272,29 @@ async function runProcess(
 
       child.stdout.on(
         'data',
-        data => {
+        d => {
           stdout =
             appendLimited(
               stdout,
-              data.toString()
+              d.toString()
             );
         }
       );
 
       child.stderr.on(
         'data',
-        data => {
-          const text =
-            data.toString();
+        d => {
+          const s =
+            d.toString();
 
           stderr =
             appendLimited(
               stderr,
-              text
+              s
             );
 
           if (onStderr) {
-            onStderr(text);
+            onStderr(s);
           }
         }
       );
@@ -354,8 +362,8 @@ export async function probeSource(
 
   const videoStream =
     streams.find(
-      stream =>
-        stream.codec_type ===
+      s =>
+        s.codec_type ===
         'video'
     );
 
@@ -368,15 +376,15 @@ export async function probeSource(
 
     hasVideo:
       streams.some(
-        stream =>
-          stream.codec_type ===
+        s =>
+          s.codec_type ===
           'video'
       ),
 
     hasAudio:
       streams.some(
-        stream =>
-          stream.codec_type ===
+        s =>
+          s.codec_type ===
           'audio'
       ),
 
@@ -415,6 +423,7 @@ export async function downloadSource(
         url,
         {
           redirect: 'follow',
+
           signal:
             controller.signal
         }
@@ -438,7 +447,8 @@ export async function downloadSource(
       );
 
     if (
-      length > maxBytes
+      length >
+      maxBytes
     ) {
       throw new Error(
         `Source is larger than MAX_SOURCE_BYTES (${maxBytes}).`
@@ -522,14 +532,14 @@ export async function downloadSource(
 function colorFilters(
   clip
 ) {
-  const color =
+  const c =
     clip?.video?.color ||
     {};
 
   const brightness =
     clamp(
       n(
-        color.brightness,
+        c.brightness,
         1
       ),
       0.5,
@@ -539,7 +549,7 @@ function colorFilters(
   const contrast =
     clamp(
       n(
-        color.contrast,
+        c.contrast,
         1
       ),
       0.5,
@@ -549,7 +559,7 @@ function colorFilters(
   const saturation =
     clamp(
       n(
-        color.saturation,
+        c.saturation,
         1
       ),
       0,
@@ -559,7 +569,7 @@ function colorFilters(
   const hue =
     clamp(
       n(
-        color.hueDegrees,
+        c.hueDegrees,
         0
       ),
       -180,
@@ -569,7 +579,8 @@ function colorFilters(
   const filters = [];
 
   filters.push(
-    `eq=brightness=${(
+    `eq=` +
+    `brightness=${(
       brightness - 1
     ).toFixed(6)}:` +
     `contrast=${contrast.toFixed(6)}:` +
@@ -595,13 +606,13 @@ function videoFadeFilters(
 ) {
   const filters = [];
 
-  const video =
+  const v =
     clip?.video || {};
 
   const fadeIn =
     clamp(
       n(
-        video.fadeInSeconds
+        v.fadeInSeconds
       ),
       0,
       duration
@@ -610,25 +621,32 @@ function videoFadeFilters(
   const fadeOut =
     clamp(
       n(
-        video.fadeOutSeconds
+        v.fadeOutSeconds
       ),
       0,
       duration
     );
 
   if (
-    fadeIn > EPS
+    fadeIn >
+    EPS
   ) {
     filters.push(
-      `fade=t=in:st=0:d=${fadeIn.toFixed(6)}:c=black`
+      `fade=` +
+      `t=in:` +
+      `st=0:` +
+      `d=${fadeIn.toFixed(6)}:` +
+      `c=black`
     );
   }
 
   if (
-    fadeOut > EPS
+    fadeOut >
+    EPS
   ) {
     filters.push(
-      `fade=t=out:` +
+      `fade=` +
+      `t=out:` +
       `st=${Math.max(
         0,
         duration - fadeOut
@@ -638,7 +656,7 @@ function videoFadeFilters(
     );
   }
 
-  const previousTransition =
+  const prevTransition =
     previousClip
       ?.video
       ?.transitionOut ||
@@ -648,16 +666,16 @@ function videoFadeFilters(
     };
 
   if (
-    previousTransition.type ===
+    prevTransition.type ===
       'dip-black' ||
-    previousTransition.type ===
+    prevTransition.type ===
       'dip-white'
   ) {
     const half =
       Math.max(
         0.1,
         n(
-          previousTransition
+          prevTransition
             .durationSeconds,
           0.8
         ) / 2
@@ -670,10 +688,12 @@ function videoFadeFilters(
       );
 
     filters.push(
-      `fade=t=in:st=0:` +
+      `fade=` +
+      `t=in:` +
+      `st=0:` +
       `d=${d.toFixed(6)}:` +
       `c=${
-        previousTransition.type ===
+        prevTransition.type ===
         'dip-white'
           ? 'white'
           : 'black'
@@ -682,7 +702,7 @@ function videoFadeFilters(
   }
 
   const ownTransition =
-    video.transitionOut ||
+    v.transitionOut ||
     {
       type: 'none',
       durationSeconds: 0
@@ -711,7 +731,8 @@ function videoFadeFilters(
       );
 
     filters.push(
-      `fade=t=out:` +
+      `fade=` +
+      `t=out:` +
       `st=${Math.max(
         0,
         duration - d
@@ -725,536 +746,6 @@ function videoFadeFilters(
       }`
     );
   }
-
-  return filters;
-}
-
-function transitionHalfSeconds(
-  transition
-) {
-  return Math.max(
-    0.1,
-    n(
-      transition
-        ?.durationSeconds,
-      0.8
-    ) / 2
-  );
-}
-
-function blurSigmaAt(
-  time,
-  clip,
-  previousClip,
-  duration
-) {
-  let sigma = 0;
-
-  const ownTransition =
-    clip
-      ?.video
-      ?.transitionOut ||
-    {
-      type: 'none',
-      durationSeconds: 0
-    };
-
-  const previousTransition =
-    previousClip
-      ?.video
-      ?.transitionOut ||
-    {
-      type: 'none',
-      durationSeconds: 0
-    };
-
-  /*
-    Incoming Blur:
-    Previous clip owns the transition.
-    Starts at 14px and returns to 0px.
-  */
-  if (
-    previousTransition.type ===
-    'blur'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        previousTransition
-      );
-
-    if (
-      time >= 0 &&
-      time < half
-    ) {
-      sigma =
-        Math.max(
-          sigma,
-          14 *
-          clamp(
-            1 -
-            time / half,
-            0,
-            1
-          )
-        );
-    }
-  }
-
-  /*
-    Outgoing Blur:
-    Current clip owns the transition.
-    Starts at 0px and reaches 14px.
-  */
-  if (
-    ownTransition.type ===
-    'blur'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        ownTransition
-      );
-
-    const start =
-      duration - half;
-
-    if (
-      time >= start &&
-      time <= duration
-    ) {
-      sigma =
-        Math.max(
-          sigma,
-          14 *
-          clamp(
-            (
-              time -
-              start
-            ) /
-            half,
-            0,
-            1
-          )
-        );
-    }
-  }
-
-  return sigma;
-}
-
-function buildBlurCommands(
-  clip,
-  previousClip,
-  duration,
-  fps
-) {
-  const ownTransition =
-    clip
-      ?.video
-      ?.transitionOut ||
-    {
-      type: 'none',
-      durationSeconds: 0
-    };
-
-  const previousTransition =
-    previousClip
-      ?.video
-      ?.transitionOut ||
-    {
-      type: 'none',
-      durationSeconds: 0
-    };
-
-  const hasBlur =
-    ownTransition.type ===
-      'blur' ||
-    previousTransition.type ===
-      'blur';
-
-  if (!hasBlur) {
-    return null;
-  }
-
-  const safeFps =
-    Math.max(
-      1,
-      Math.round(
-        n(
-          fps,
-          30
-        )
-      )
-    );
-
-  const times =
-    new Set();
-
-  times.add(
-    '0.000000'
-  );
-
-  times.add(
-    duration.toFixed(6)
-  );
-
-  function addSampleRange(
-    start,
-    end
-  ) {
-    const safeStart =
-      clamp(
-        start,
-        0,
-        duration
-      );
-
-    const safeEnd =
-      clamp(
-        end,
-        0,
-        duration
-      );
-
-    if (
-      safeEnd <
-      safeStart
-    ) {
-      return;
-    }
-
-    const steps =
-      Math.max(
-        1,
-        Math.ceil(
-          (
-            safeEnd -
-            safeStart
-          ) *
-          safeFps
-        )
-      );
-
-    for (
-      let i = 0;
-      i <= steps;
-      i++
-    ) {
-      const ratio =
-        i / steps;
-
-      const t =
-        safeStart +
-        (
-          safeEnd -
-          safeStart
-        ) *
-        ratio;
-
-      times.add(
-        t.toFixed(6)
-      );
-    }
-  }
-
-  if (
-    previousTransition.type ===
-    'blur'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        previousTransition
-      );
-
-    addSampleRange(
-      0,
-      Math.min(
-        duration,
-        half
-      )
-    );
-  }
-
-  if (
-    ownTransition.type ===
-    'blur'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        ownTransition
-      );
-
-    addSampleRange(
-      Math.max(
-        0,
-        duration - half
-      ),
-      duration
-    );
-  }
-
-  const sortedTimes =
-    Array.from(times)
-      .map(Number)
-      .filter(
-        Number.isFinite
-      )
-      .sort(
-        (a, b) =>
-          a - b
-      );
-
-  const commands = [];
-
-  let previousSigma =
-    null;
-
-  for (
-    const t of
-    sortedTimes
-  ) {
-    const sigma =
-      blurSigmaAt(
-        t,
-        clip,
-        previousClip,
-        duration
-      );
-
-    const roundedSigma =
-      Math.round(
-        sigma * 1000
-      ) / 1000;
-
-    if (
-      previousSigma !==
-        null &&
-      Math.abs(
-        roundedSigma -
-        previousSigma
-      ) < 0.001
-    ) {
-      continue;
-    }
-
-    commands.push(
-  `${t.toFixed(6)} ` +
-  `gblur@olivia_blur sigma ${roundedSigma.toFixed(3)},` +
-  `gblur@olivia_blur sigmaV ${roundedSigma.toFixed(3)}`
-);
-
-    previousSigma =
-      roundedSigma;
-  }
-
-  if (
-    commands.length === 0
-  ) {
-   commands.push(
-  '0.000000 gblur@olivia_blur sigma 0.000,' +
-  'gblur@olivia_blur sigmaV 0.000'
-);
-  }
-
-  return commands.join(
-    ';'
-  );
-}
-
-function transitionVisualFilters(
-  clip,
-  previousClip,
-  duration,
-  width,
-  height,
-  fps
-) {
-  const filters = [];
-
-  const ownTransition =
-    clip
-      ?.video
-      ?.transitionOut ||
-    {
-      type: 'none',
-      durationSeconds: 0
-    };
-
-  const previousTransition =
-    previousClip
-      ?.video
-      ?.transitionOut ||
-    {
-      type: 'none',
-      durationSeconds: 0
-    };
-
-  const hasZoom =
-    ownTransition.type ===
-      'zoom' ||
-    previousTransition.type ===
-      'zoom';
-
-  const hasBlur =
-    ownTransition.type ===
-      'blur' ||
-    previousTransition.type ===
-      'blur';
-
-  if (
-    !hasZoom &&
-    !hasBlur
-  ) {
-    return filters;
-  }
-
-  /*
-    BLUR
-    ----
-    The editor preview uses:
-    0 -> 14px on the outgoing half
-    14 -> 0px on the incoming half.
-
-    sendcmd updates gblur while FFmpeg renders.
-  */
-  if (hasBlur) {
-    const commands =
-      buildBlurCommands(
-        clip,
-        previousClip,
-        duration,
-        fps
-      );
-
-    filters.push(
-      `sendcmd=c='${commands}'`
-    );
-
-    filters.push(
-      'gblur@olivia_blur=' +
-      'sigma=0:' +
-      'sigmaV=0:' +
-      'steps=1'
-    );
-  }
-
-  /*
-    ZOOM
-    ----
-    Matches editor preview:
-    outgoing 1.00 -> 1.14
-    incoming 1.14 -> 1.00
-  */
-  let incomingZoomExpr =
-    '1';
-
-  let outgoingZoomExpr =
-    '1';
-
-  if (
-    previousTransition.type ===
-    'zoom'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        previousTransition
-      );
-
-    incomingZoomExpr =
-      `if(lt(t,${half.toFixed(6)}),` +
-      `1+0.14*(1-t/${half.toFixed(6)}),1)`;
-  }
-
-  if (
-    ownTransition.type ===
-    'zoom'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        ownTransition
-      );
-
-    const start =
-      duration - half;
-
-    outgoingZoomExpr =
-      `if(gte(t,${start.toFixed(6)}),` +
-      `1+0.14*((t-${start.toFixed(6)})/` +
-      `${half.toFixed(6)}),1)`;
-  }
-
-  const zoomExpr =
-    `max(` +
-    `${incomingZoomExpr},` +
-    `${outgoingZoomExpr}` +
-    `)`;
-
-  /*
-    The browser preview scales a blurred frame
-    to 1.03 so the softened outer edge is hidden.
-  */
-  const blurConditions =
-    [];
-
-  if (
-    previousTransition.type ===
-    'blur'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        previousTransition
-      );
-
-    blurConditions.push(
-      `lt(t,${half.toFixed(6)})`
-    );
-  }
-
-  if (
-    ownTransition.type ===
-    'blur'
-  ) {
-    const half =
-      transitionHalfSeconds(
-        ownTransition
-      );
-
-    const start =
-      duration - half;
-
-    blurConditions.push(
-      `gte(t,${start.toFixed(6)})`
-    );
-  }
-
-  const blurScaleExpr =
-    blurConditions.length >
-    0
-      ? `if(gt(${blurConditions.join('+')},0),1.03,1)`
-      : '1';
-
-  /*
-    If Zoom and Blur meet on the same clip,
-    use whichever scale is larger instead of
-    multiplying them.
-  */
-  const finalScaleExpr =
-    `max(` +
-    `${zoomExpr},` +
-    `${blurScaleExpr}` +
-    `)`;
-
-  filters.push(
-    `scale=` +
-    `w='trunc(iw*(${finalScaleExpr})/2)*2':` +
-    `h='trunc(ih*(${finalScaleExpr})/2)*2':` +
-    `eval=frame`
-  );
-
-  filters.push(
-    `crop=${width}:${height}:` +
-    `(iw-${width})/2:` +
-    `(ih-${height})/2`
-  );
 
   return filters;
 }
@@ -1282,16 +773,15 @@ function volumeExpression(
       1
     );
 
-  const automation =
+  const va =
     audio
       ?.volumeAutomation ||
     {};
 
-  const startPosition =
+  const s =
     clamp(
       n(
-        automation
-          .startPosition,
+        va.startPosition,
         0
       ),
       0,
@@ -1299,11 +789,10 @@ function volumeExpression(
     ) *
     duration;
 
-  const endPosition =
+  const e =
     clamp(
       n(
-        automation
-          .endPosition,
+        va.endPosition,
         1
       ),
       0.02,
@@ -1314,8 +803,7 @@ function volumeExpression(
   const startLevel =
     clamp(
       n(
-        automation
-          .startLevel,
+        va.startLevel,
         1
       ),
       0,
@@ -1325,8 +813,7 @@ function volumeExpression(
   const endLevel =
     clamp(
       n(
-        automation
-          .endLevel,
+        va.endLevel,
         1
       ),
       0,
@@ -1337,7 +824,8 @@ function volumeExpression(
     Math.abs(
       startLevel -
       endLevel
-    ) < EPS
+    ) <
+    EPS
   ) {
     return (
       base *
@@ -1348,19 +836,18 @@ function volumeExpression(
   const span =
     Math.max(
       0.001,
-      endPosition -
-      startPosition
+      e - s
     );
 
   return (
     `${base.toFixed(6)}*` +
-    `if(lt(t,${startPosition.toFixed(6)}),` +
+    `if(lt(t,${s.toFixed(6)}),` +
     `${startLevel.toFixed(6)},` +
-    `if(gt(t,${endPosition.toFixed(6)}),` +
+    `if(gt(t,${e.toFixed(6)}),` +
     `${endLevel.toFixed(6)},` +
     `${startLevel.toFixed(6)}+` +
     `(${endLevel.toFixed(6)}-${startLevel.toFixed(6)})*` +
-    `(t-${startPosition.toFixed(6)})/` +
+    `(t-${s.toFixed(6)})/` +
     `${span.toFixed(6)}))`
   );
 }
@@ -1401,8 +888,7 @@ function audioFilters(
     Math.max(
       0,
       n(
-        audio
-          .sourceInSeconds,
+        audio.sourceInSeconds,
         clip
           ?.source
           ?.inSeconds
@@ -1412,9 +898,9 @@ function audioFilters(
   let sourceOut =
     Math.max(
       sourceIn + 0.001,
+
       n(
-        audio
-          .sourceOutSeconds,
+        audio.sourceOutSeconds,
         clip
           ?.source
           ?.outSeconds
@@ -1436,8 +922,7 @@ function audioFilters(
   ) {
     sourceIn =
       Math.min(
-        sourceOut -
-        0.001,
+        sourceOut - 0.001,
         sourceIn +
         (-offset)
       );
@@ -1446,9 +931,11 @@ function audioFilters(
   const usableDuration =
     Math.max(
       0.001,
+
       Math.min(
         sourceOut -
         sourceIn,
+
         duration -
         delay
       )
@@ -1471,7 +958,8 @@ function audioFilters(
   ];
 
   if (
-    delay > EPS
+    delay >
+    EPS
   ) {
     const delayMs =
       Math.round(
@@ -1516,7 +1004,8 @@ function audioFilters(
     );
 
   if (
-    fadeIn > EPS
+    fadeIn >
+    EPS
   ) {
     filters.push(
       `afade=` +
@@ -1527,7 +1016,8 @@ function audioFilters(
   }
 
   if (
-    fadeOut > EPS
+    fadeOut >
+    EPS
   ) {
     filters.push(
       `afade=` +
@@ -1681,7 +1171,207 @@ function lowMemoryAudioEncoderArgs() {
   ];
 }
 
-function videoFilterChain(
+function transitionHalfSeconds(
+  transition
+) {
+  return Math.max(
+    0.1,
+
+    n(
+      transition
+        ?.durationSeconds,
+      0.8
+    ) / 2
+  );
+}
+
+function zoomTransitionFilters(
+  clip,
+  previousClip,
+  duration,
+  width,
+  height
+) {
+  const ownTransition =
+    clip?.video?.transitionOut ||
+    {
+      type: 'none',
+      durationSeconds: 0
+    };
+
+  const previousTransition =
+    previousClip
+      ?.video
+      ?.transitionOut ||
+    {
+      type: 'none',
+      durationSeconds: 0
+    };
+
+  if (
+    ownTransition.type !==
+      'zoom' &&
+    previousTransition.type !==
+      'zoom'
+  ) {
+    return [];
+  }
+
+  let incomingExpr =
+    '1';
+
+  let outgoingExpr =
+    '1';
+
+  if (
+    previousTransition.type ===
+    'zoom'
+  ) {
+    const half =
+      transitionHalfSeconds(
+        previousTransition
+      );
+
+    incomingExpr =
+      `if(lt(t,${half.toFixed(6)}),` +
+      `1+0.14*(1-t/${half.toFixed(6)}),1)`;
+  }
+
+  if (
+    ownTransition.type ===
+    'zoom'
+  ) {
+    const half =
+      transitionHalfSeconds(
+        ownTransition
+      );
+
+    const start =
+      Math.max(
+        0,
+        duration - half
+      );
+
+    outgoingExpr =
+      `if(gte(t,${start.toFixed(6)}),` +
+      `1+0.14*min(1,max(0,(t-${start.toFixed(6)})/${half.toFixed(6)})),1)`;
+  }
+
+  const zoomExpr =
+    `max(` +
+    `${incomingExpr},` +
+    `${outgoingExpr}` +
+    `)`;
+
+  return [
+    `scale=` +
+    `w='trunc(iw*(${zoomExpr})/2)*2':` +
+    `h='trunc(ih*(${zoomExpr})/2)*2':` +
+    `eval=frame`,
+
+    `crop=` +
+    `${width}:` +
+    `${height}:` +
+    `(iw-${width})/2:` +
+    `(ih-${height})/2`
+  ];
+}
+
+function blurTransitionMixExpression(
+  clip,
+  previousClip,
+  duration
+) {
+  const ownTransition =
+    clip?.video?.transitionOut ||
+    {
+      type: 'none',
+      durationSeconds: 0
+    };
+
+  const previousTransition =
+    previousClip
+      ?.video
+      ?.transitionOut ||
+    {
+      type: 'none',
+      durationSeconds: 0
+    };
+
+  const expressions = [];
+
+  /*
+    Incoming Blur:
+    Previous clip owns the transition.
+
+    14px blur -> 0px blur
+    over the first half.
+  */
+  if (
+    previousTransition.type ===
+    'blur'
+  ) {
+    const half =
+      transitionHalfSeconds(
+        previousTransition
+      );
+
+    expressions.push(
+      `if(lt(T,${half.toFixed(6)}),` +
+      `max(0,min(1,1-T/${half.toFixed(6)})),0)`
+    );
+  }
+
+  /*
+    Outgoing Blur:
+    Current clip owns the transition.
+
+    0px blur -> 14px blur
+    over the final half.
+  */
+  if (
+    ownTransition.type ===
+    'blur'
+  ) {
+    const half =
+      transitionHalfSeconds(
+        ownTransition
+      );
+
+    const start =
+      Math.max(
+        0,
+        duration - half
+      );
+
+    expressions.push(
+      `if(gte(T,${start.toFixed(6)}),` +
+      `max(0,min(1,(T-${start.toFixed(6)})/${half.toFixed(6)})),0)`
+    );
+  }
+
+  if (
+    expressions.length ===
+    0
+  ) {
+    return null;
+  }
+
+  if (
+    expressions.length ===
+    1
+  ) {
+    return expressions[0];
+  }
+
+  return (
+    `max(` +
+    `${expressions.join(',')}` +
+    `)`
+  );
+}
+
+function baseVideoFilterChain(
   clip,
   previousClip,
   duration,
@@ -1689,14 +1379,14 @@ function videoFilterChain(
   height,
   fps
 ) {
-  const inSeconds =
+  const inS =
     n(
       clip
         ?.source
         ?.inSeconds
     );
 
-  const outSeconds =
+  const outS =
     n(
       clip
         ?.source
@@ -1705,17 +1395,19 @@ function videoFilterChain(
 
   return [
     `trim=` +
-    `start=${inSeconds.toFixed(6)}:` +
-    `end=${outSeconds.toFixed(6)}`,
+    `start=${inS.toFixed(6)}:` +
+    `end=${outS.toFixed(6)}`,
 
     'setpts=PTS-STARTPTS',
 
     `scale=` +
     `${width}:` +
     `${height}:` +
-    'force_original_aspect_ratio=increase',
+    `force_original_aspect_ratio=increase`,
 
-    `crop=${width}:${height}`,
+    `crop=` +
+    `${width}:` +
+    `${height}`,
 
     `fps=${fps}`,
 
@@ -1725,13 +1417,12 @@ function videoFilterChain(
       clip
     ),
 
-    ...transitionVisualFilters(
+    ...zoomTransitionFilters(
       clip,
       previousClip,
       duration,
       width,
-      height,
-      fps
+      height
     ),
 
     ...videoFadeFilters(
@@ -1741,6 +1432,90 @@ function videoFilterChain(
     ),
 
     'format=yuv420p'
+  ];
+}
+
+function buildVideoFilterGraph(
+  clip,
+  previousClip,
+  duration,
+  width,
+  height,
+  fps
+) {
+  const baseChain =
+    baseVideoFilterChain(
+      clip,
+      previousClip,
+      duration,
+      width,
+      height,
+      fps
+    ).join(',');
+
+  const blurMix =
+    blurTransitionMixExpression(
+      clip,
+      previousClip,
+      duration
+    );
+
+  /*
+    No Blur involved:
+    keep the original low-memory path.
+  */
+  if (!blurMix) {
+    return [
+      `[0:v]${baseChain}[vout]`
+    ];
+  }
+
+  /*
+    Stable Blur implementation.
+
+    IMPORTANT:
+    There is NO sendcmd here.
+
+    One branch stays normal.
+    One branch receives fixed 14px gblur.
+    FFmpeg blend smoothly mixes between them
+    according to transition time.
+
+    The blurred branch is 1.03x larger to hide
+    the soft edge, matching OLIVIA preview behaviour.
+  */
+  const blendExpr =
+    `A*(1-(${blurMix}))+` +
+    `B*(${blurMix})`;
+
+  return [
+    `[0:v]` +
+    `${baseChain}` +
+    `[vbase]`,
+
+    `[vbase]` +
+    `split=2` +
+    `[vsharp][vblurpre]`,
+
+    `[vblurpre]` +
+    `scale=` +
+    `w='trunc(iw*1.03/2)*2':` +
+    `h='trunc(ih*1.03/2)*2',` +
+    `crop=` +
+    `${width}:` +
+    `${height}:` +
+    `(iw-${width})/2:` +
+    `(ih-${height})/2,` +
+    `gblur=` +
+    `sigma=14:` +
+    `sigmaV=14:` +
+    `steps=1` +
+    `[vblur]`,
+
+    `[vsharp][vblur]` +
+    `blend=` +
+    `all_expr='${blendExpr}'` +
+    `[vout]`
   ];
 }
 
@@ -1755,14 +1530,14 @@ async function renderClipSegment({
   height,
   fps
 }) {
-  const inSeconds =
+  const inS =
     n(
       clip
         ?.source
         ?.inSeconds
     );
 
-  const outSeconds =
+  const outS =
     n(
       clip
         ?.source
@@ -1772,13 +1547,13 @@ async function renderClipSegment({
   const duration =
     Math.max(
       0.001,
-      outSeconds -
-      inSeconds
+      outS - inS
     );
 
   const segmentPath =
     path.join(
       workDir,
+
       `segment-${String(
         index
       ).padStart(
@@ -1787,7 +1562,15 @@ async function renderClipSegment({
       )}.mp4`
     );
 
-  const filters = [];
+  const filters =
+    buildVideoFilterGraph(
+      clip,
+      previousClip,
+      duration,
+      width,
+      height,
+      fps
+    );
 
   const args = [
     ...lowMemoryFfmpegBaseArgs(),
@@ -1796,23 +1579,10 @@ async function renderClipSegment({
     sourcePath
   ];
 
-  filters.push(
-    `[0:v]` +
-    videoFilterChain(
-      clip,
-      previousClip,
-      duration,
-      width,
-      height,
-      fps
-    ).join(',') +
-    `[vout]`
-  );
-
   if (
     probe.hasAudio
   ) {
-    const audioPlan =
+    const af =
       audioFilters(
         clip,
         duration,
@@ -1821,7 +1591,7 @@ async function renderClipSegment({
 
     filters.push(
       `[0:a]` +
-      `${audioPlan.filters.join(',')}` +
+      `${af.filters.join(',')}` +
       `[aout]`
     );
   } else {
@@ -1867,8 +1637,7 @@ async function renderClipSegment({
     segmentPath
   );
 
-  const stderrTail =
-    [];
+  const stderrTail = [];
 
   await runProcess(
     'ffmpeg',
@@ -2102,11 +1871,6 @@ async function applyFinalOverlays(
       ) /
       100;
 
-    /*
-      V123/V126 preview bridge:
-      fontSizePx was measured against
-      editorFrameHeightPx.
-    */
     const editorFrameHeight =
       Math.max(
         1,
@@ -2120,6 +1884,7 @@ async function applyFinalOverlays(
     const fontSize =
       Math.max(
         8,
+
         n(
           overlay
             .fontSizePx,
@@ -2132,6 +1897,7 @@ async function applyFinalOverlays(
     const start =
       Math.max(
         0,
+
         n(
           overlay
             .startSeconds,
@@ -2142,6 +1908,7 @@ async function applyFinalOverlays(
     const end =
       Math.max(
         start,
+
         n(
           overlay
             .endSeconds,
@@ -2149,10 +1916,6 @@ async function applyFinalOverlays(
         )
       );
 
-    /*
-      Horizontal text alignment in editor is centered
-      inside the overlay box.
-    */
     const x =
       `w*${xPercent.toFixed(8)}+` +
       `(w*${widthPercent.toFixed(8)}-text_w)/2`;
@@ -2299,6 +2062,34 @@ export async function buildFfmpegPlan(
     sourceProbe:
       probe
   };
+}
+
+function reportProgress(
+  options,
+  progress,
+  phase,
+  detail = null
+) {
+  if (
+    typeof options
+      ?.onProgress !==
+    'function'
+  ) {
+    return;
+  }
+
+  try {
+    options.onProgress(
+      progress,
+      phase,
+      detail
+    );
+  } catch {
+    /*
+      Progress reporting may never
+      break the render itself.
+    */
+  }
 }
 
 export async function renderJob(
@@ -2455,26 +2246,22 @@ export async function renderJob(
         .timeline
         .clips;
 
-    const segmentPaths =
-      [];
-
-    const ffmpegLogTail =
-      [];
+    const segmentPaths = [];
+    const ffmpegLogTail = [];
 
     /*
       Low-memory render:
-      one clip at a time.
+      render one clip at a time.
     */
     for (
-      let index = 0;
-      index <
-      clips.length;
-      index++
+      let i = 0;
+      i < clips.length;
+      i++
     ) {
-      const startProgress =
+      const progress =
         10 +
         Math.floor(
-          index /
+          i /
           clips.length *
           65
         );
@@ -2482,13 +2269,13 @@ export async function renderJob(
       reportProgress(
         options,
 
-        startProgress,
+        progress,
 
         'rendering-clips',
 
         {
           clip:
-            index + 1,
+            i + 1,
 
           totalClips:
             clips.length
@@ -2498,16 +2285,18 @@ export async function renderJob(
       const segment =
         await renderClipSegment({
           clip:
-            clips[index],
+            clips[i],
 
           previousClip:
-            index > 0
+            i > 0
               ? clips[
-                  index - 1
+                  i - 1
                 ]
               : null,
 
-          index,
+          index:
+            i,
+
           sourcePath,
           probe,
           workDir,
@@ -2586,7 +2375,7 @@ export async function renderJob(
         'OLIVIA_RENDER_RESULT_V1',
 
       worker:
-        'V130-ZOOM-BLUR',
+        'V131-STABLE-BLUR-BLEND',
 
       jobId:
         job.jobId,
