@@ -103,7 +103,7 @@ export function inspectSupport(manifest) {
 
   for (const clip of clips) {
     const transition = clip?.video?.transitionOut?.type || 'none';
-    if (!['none', 'dip-black', 'dip-white'].includes(transition)) {
+    if (!['none', 'dip-black', 'dip-white', 'zoom'].includes(transition)) {
       blocking.push(`Clip ${clip.clipNumber ?? clip.id}: transition '${transition}' is not yet supported by Worker V1.`);
     }
     const color = clip?.video?.color || {};
