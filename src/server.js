@@ -514,15 +514,16 @@ const server = http.createServer(
           support.blocking.length
         ) {
           return json(res, 200, {
-            schema:
-              'OLIVIA_RENDER_ACCEPTED_V1',
-            status:
-              'rejected',
-            errors:
-              support.blocking,
-            warnings:
-              support.warnings || []
-          });
+  schema: 'OLIVIA_RENDER_ACCEPTED_V1',
+  jobId: safeJobId(job),
+  status: 'rejected',
+  progress: 5,
+  phase: 'failed',
+  statusUrl: '',
+  error: support.blocking.join(' | '),
+  errors: support.blocking,
+  warnings: support.warnings || []
+});
         }
 
         const jobId =
