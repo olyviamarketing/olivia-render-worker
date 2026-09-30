@@ -981,7 +981,6 @@ function colorFilters(
 
   return filters;
 }
-}
 
 function videoFadeFilters(
   clip,
