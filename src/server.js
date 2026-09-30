@@ -513,7 +513,7 @@ const server = http.createServer(
           support.blocking &&
           support.blocking.length
         ) {
-          return json(res, 422, {
+          return json(res, 200, {
             schema:
               'OLIVIA_RENDER_ACCEPTED_V1',
             status:
