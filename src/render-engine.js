@@ -705,10 +705,167 @@ function colorFilters(
 
   const filters = [];
 
+  function matrixFilter(
+    matrix
+  ) {
+    return (
+      'colorchannelmixer=' +
+
+      `rr=${matrix[0][0].toFixed(6)}:` +
+      `rg=${matrix[0][1].toFixed(6)}:` +
+      `rb=${matrix[0][2].toFixed(6)}:` +
+
+      `gr=${matrix[1][0].toFixed(6)}:` +
+      `gg=${matrix[1][1].toFixed(6)}:` +
+      `gb=${matrix[1][2].toFixed(6)}:` +
+
+      `br=${matrix[2][0].toFixed(6)}:` +
+      `bg=${matrix[2][1].toFixed(6)}:` +
+      `bb=${matrix[2][2].toFixed(6)}`
+    );
+  }
+
+  function cssSepiaMatrix(
+    amount
+  ) {
+    const a =
+      clamp(
+        amount,
+        0,
+        1
+      );
+
+    return [
+      [
+        1 - 0.607 * a,
+        0.769 * a,
+        0.189 * a
+      ],
+      [
+        0.349 * a,
+        1 - 0.314 * a,
+        0.168 * a
+      ],
+      [
+        0.272 * a,
+        0.534 * a,
+        1 - 0.869 * a
+      ]
+    ];
+  }
+
+  function cssHueRotateMatrix(
+    degrees
+  ) {
+    const radians =
+      degrees *
+      Math.PI /
+      180;
+
+    const cos =
+      Math.cos(
+        radians
+      );
+
+    const sin =
+      Math.sin(
+        radians
+      );
+
+    return [
+      [
+        0.213 +
+        cos * 0.787 -
+        sin * 0.213,
+
+        0.715 -
+        cos * 0.715 -
+        sin * 0.715,
+
+        0.072 -
+        cos * 0.072 +
+        sin * 0.928
+      ],
+
+      [
+        0.213 -
+        cos * 0.213 +
+        sin * 0.143,
+
+        0.715 +
+        cos * 0.285 +
+        sin * 0.140,
+
+        0.072 -
+        cos * 0.072 -
+        sin * 0.283
+      ],
+
+      [
+        0.213 -
+        cos * 0.213 -
+        sin * 0.787,
+
+        0.715 -
+        cos * 0.715 +
+        sin * 0.715,
+
+        0.072 +
+        cos * 0.928 +
+        sin * 0.072
+      ]
+    ];
+  }
+
+  function cssSaturateMatrix(
+    amount
+  ) {
+    const s =
+      Math.max(
+        0,
+        amount
+      );
+
+    return [
+      [
+        0.213 +
+        0.787 * s,
+
+        0.715 -
+        0.715 * s,
+
+        0.072 -
+        0.072 * s
+      ],
+
+      [
+        0.213 -
+        0.213 * s,
+
+        0.715 +
+        0.285 * s,
+
+        0.072 -
+        0.072 * s
+      ],
+
+      [
+        0.213 -
+        0.213 * s,
+
+        0.715 -
+        0.715 * s,
+
+        0.072 +
+        0.928 * s
+      ]
+    ];
+  }
+
   /*
-    Existing OLIVIA
-    brightness / contrast /
-    saturation render path.
+    Existing brightness /
+    contrast /
+    saturation path.
   */
   filters.push(
     `eq=` +
@@ -721,11 +878,9 @@ function colorFilters(
   );
 
   /*
-    =====================================================
     WARMTH
-    =====================================================
 
-    Browser preview:
+    Exact editor order:
 
     positive:
       sepia(warmth * 0.35)
@@ -733,103 +888,50 @@ function colorFilters(
 
     negative:
       hue-rotate(-warmth * 18deg)
-
-    FFmpeg doesn't have CSS sepia(amount),
-    so interpolate identity with the standard
-    sepia colour matrix.
   */
 
   if (
     warmth >
     0.001
   ) {
-    const sepia =
-      warmth *
-      0.35;
-
-    const rr =
-      1 -
-      0.607 *
-      sepia;
-
-    const rg =
-      0.769 *
-      sepia;
-
-    const rb =
-      0.189 *
-      sepia;
-
-    const gr =
-      0.349 *
-      sepia;
-
-    const gg =
-      1 -
-      0.314 *
-      sepia;
-
-    const gb =
-      0.168 *
-      sepia;
-
-    const br =
-      0.272 *
-      sepia;
-
-    const bg =
-      0.534 *
-      sepia;
-
-    const bb =
-      1 -
-      0.869 *
-      sepia;
-
     filters.push(
-      `colorchannelmixer=` +
-
-      `rr=${rr.toFixed(6)}:` +
-      `rg=${rg.toFixed(6)}:` +
-      `rb=${rb.toFixed(6)}:` +
-
-      `gr=${gr.toFixed(6)}:` +
-      `gg=${gg.toFixed(6)}:` +
-      `gb=${gb.toFixed(6)}:` +
-
-      `br=${br.toFixed(6)}:` +
-      `bg=${bg.toFixed(6)}:` +
-      `bb=${bb.toFixed(6)}`
+      matrixFilter(
+        cssSepiaMatrix(
+          warmth *
+          0.35
+        )
+      )
     );
 
     filters.push(
-      `hue=` +
-      `h=${(
-        -warmth *
-        12
-      ).toFixed(4)}`
+      matrixFilter(
+        cssHueRotateMatrix(
+          -warmth *
+          12
+        )
+      )
     );
   } else if (
     warmth <
     -0.001
   ) {
     filters.push(
-      `hue=` +
-      `h=${(
-        -warmth *
-        18
-      ).toFixed(4)}`
+      matrixFilter(
+        cssHueRotateMatrix(
+          -warmth *
+          18
+        )
+      )
     );
   }
 
   /*
-    =====================================================
     TINT
-    =====================================================
 
-    Browser preview:
-      hue-rotate(tint * 10deg)
-      saturate(1 + abs(tint) * 0.12)
+    Editor order:
+
+    hue-rotate(tint * 10deg)
+    saturate(1 + abs(tint) * 0.12)
   */
 
   if (
@@ -839,28 +941,31 @@ function colorFilters(
     0.001
   ) {
     filters.push(
-      `hue=` +
-      `h=${(
-        tint *
-        10
-      ).toFixed(4)}`
+      matrixFilter(
+        cssHueRotateMatrix(
+          tint *
+          10
+        )
+      )
     );
 
     filters.push(
-      `hue=` +
-      `s=${(
-        1 +
-        Math.abs(
-          tint
-        ) *
-        0.12
-      ).toFixed(6)}`
+      matrixFilter(
+        cssSaturateMatrix(
+          1 +
+          Math.abs(
+            tint
+          ) *
+          0.12
+        )
+      )
     );
   }
 
   /*
-    User Hue comes after
-    Warmth + Tint in the editor.
+    Leave ordinary Hue alone
+    for now so we don't disturb
+    an already working feature.
   */
 
   if (
@@ -870,12 +975,12 @@ function colorFilters(
     EPS
   ) {
     filters.push(
-      `hue=` +
-      `h=${hue.toFixed(4)}`
+      `hue=h=${hue.toFixed(4)}`
     );
   }
 
   return filters;
+}
 }
 
 function videoFadeFilters(
