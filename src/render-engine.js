@@ -343,7 +343,64 @@ function lowMemoryAudioEncoderArgs() {
     '-ac', '2'
   ];
 }
+function zoomTransitionFilters(
+  clip,
+  previousClip,
+  duration,
+  width,
+  height
+) {
+  const ownTransition =
+    clip?.video?.transitionOut ||
+    { type: 'none', durationSeconds: 0 };
 
+  const previousTransition =
+    previousClip?.video?.transitionOut ||
+    { type: 'none', durationSeconds: 0 };
+
+  if (
+    ownTransition.type !== 'zoom' &&
+    previousTransition.type !== 'zoom'
+  ) {
+    return [];
+  }
+
+  let incomingExpr = '1';
+  let outgoingExpr = '1';
+
+  if (previousTransition.type === 'zoom') {
+    const half = Math.max(
+      0.1,
+      n(previousTransition.durationSeconds, 0.8) / 2
+    );
+
+    incomingExpr =
+      `if(lt(t,${half.toFixed(6)}),` +
+      `1+0.14*(1-t/${half.toFixed(6)}),1)`;
+  }
+
+  if (ownTransition.type === 'zoom') {
+    const half = Math.max(
+      0.1,
+      n(ownTransition.durationSeconds, 0.8) / 2
+    );
+
+    const start = duration - half;
+
+    outgoingExpr =
+      `if(gte(t,${start.toFixed(6)}),` +
+      `1+0.14*((t-${start.toFixed(6)})/${half.toFixed(6)}),1)`;
+  }
+
+  const zoomExpr =
+    `max(${incomingExpr},${outgoingExpr})`;
+
+  return [
+    `scale=w='trunc(iw*(${zoomExpr})/2)*2':` +
+      `h='trunc(ih*(${zoomExpr})/2)*2':eval=frame`,
+    `crop=${width}:${height}:(iw-${width})/2:(ih-${height})/2`
+  ];
+}
 function videoFilterChain(clip, previousClip, duration, width, height, fps) {
   const inS = n(clip?.source?.inSeconds);
   const outS = n(clip?.source?.outSeconds);
@@ -356,8 +413,15 @@ function videoFilterChain(clip, previousClip, duration, width, height, fps) {
     `fps=${fps}`,
     'setsar=1',
     ...colorFilters(clip),
-    ...videoFadeFilters(clip, previousClip, duration),
-    'format=yuv420p'
+...zoomTransitionFilters(
+  clip,
+  previousClip,
+  duration,
+  width,
+  height
+),
+...videoFadeFilters(clip, previousClip, duration),
+'format=yuv420p'
   ];
 }
 
