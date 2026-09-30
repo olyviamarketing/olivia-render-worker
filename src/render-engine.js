@@ -2496,7 +2496,7 @@ export async function buildFfmpegPlan(
   return {
     output: {
       ...output,
-      fps: 30
+      fps: 60
     },
 
     support,
