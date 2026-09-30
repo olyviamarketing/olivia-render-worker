@@ -1037,10 +1037,10 @@ function buildBlurCommands(
     }
 
     commands.push(
-      `${t.toFixed(6)} ` +
-      `olivia_blur sigma ${roundedSigma.toFixed(3)},` +
-      `olivia_blur sigmaV ${roundedSigma.toFixed(3)}`
-    );
+  `${t.toFixed(6)} ` +
+  `gblur@olivia_blur sigma ${roundedSigma.toFixed(3)},` +
+  `gblur@olivia_blur sigmaV ${roundedSigma.toFixed(3)}`
+);
 
     previousSigma =
       roundedSigma;
@@ -1049,10 +1049,10 @@ function buildBlurCommands(
   if (
     commands.length === 0
   ) {
-    commands.push(
-      '0.000000 olivia_blur sigma 0.000,' +
-      'olivia_blur sigmaV 0.000'
-    );
+   commands.push(
+  '0.000000 gblur@olivia_blur sigma 0.000,' +
+  'gblur@olivia_blur sigmaV 0.000'
+);
   }
 
   return commands.join(
