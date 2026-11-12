@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   renderJob,
   validateJob,
@@ -25,7 +26,23 @@ const PUBLIC_BASE_URL = String(
   process.env.PUBLIC_BASE_URL || ''
 ).replace(/\/$/, '');
 
-const renderJobs = new Map();
+const DODO_WEBHOOK_SECRET = String(
+  process.env.DODO_WEBHOOK_SECRET || ''
+).trim();
+
+const BUBBLE_DODO_WEBHOOK_URL = String(
+  process.env.BUBBLE_DODO_WEBHOOK_URL || ''
+).trim();
+
+const BUBBLE_DODO_WEBHOOK_TOKEN = String(
+  process.env.BUBBLE_DODO_WEBHOOK_TOKEN || ''
+).trim();
+
+const DODO_WEBHOOK_TOLERANCE_SECONDS =
+  5 * 60;
+
+const renderJobs =
+  new Map();
 
 
 function publicOutputUrl(filename) {
@@ -50,14 +67,19 @@ function publicStatusUrl(jobId) {
 
 
 function safeJobId(job) {
-  const raw = String(
-    job && job.jobId || ''
-  ).trim();
+  const raw =
+    String(
+      job &&
+      job.jobId ||
+      ''
+    ).trim();
 
-  return raw ||
+  return (
+    raw ||
     `olivia-${Date.now().toString(36)}-${Math.random()
       .toString(36)
-      .slice(2, 10)}`;
+      .slice(2, 10)}`
+  );
 }
 
 
@@ -65,9 +87,12 @@ function normaliseProgress(
   value,
   fallback = 0
 ) {
-  const n = Number(value);
+  const n =
+    Number(value);
 
-  if (!Number.isFinite(n)) {
+  if (
+    !Number.isFinite(n)
+  ) {
     return fallback;
   }
 
@@ -91,16 +116,18 @@ function updateJobProgress(
     return;
   }
 
-  const next = normaliseProgress(
-    value,
-    state.progress || 0
-  );
+  const next =
+    normaliseProgress(
+      value,
+      state.progress || 0
+    );
 
   if (
     next >=
     (state.progress || 0)
   ) {
-    state.progress = next;
+    state.progress =
+      next;
   }
 
   if (phase) {
@@ -116,16 +143,21 @@ function updateJobProgress(
   }
 
   state.updatedAt =
-    new Date().toISOString();
+    new Date()
+      .toISOString();
 }
 
 
-async function runRenderInBackground(job) {
+async function runRenderInBackground(
+  job
+) {
   const jobId =
     safeJobId(job);
 
   const state =
-    renderJobs.get(jobId);
+    renderJobs.get(
+      jobId
+    );
 
   if (!state) {
     return;
@@ -135,7 +167,8 @@ async function runRenderInBackground(job) {
     'processing';
 
   state.startedAt =
-    new Date().toISOString();
+    new Date()
+      .toISOString();
 
   updateJobProgress(
     state,
@@ -203,17 +236,22 @@ async function runRenderInBackground(job) {
 
     state.result = {
       ...result,
+
       outputUrl:
         state.outputUrl,
+
       downloadUrl:
         state.downloadUrl,
+
       elapsedMs:
         state.elapsedMs
     };
 
     delete state.result.outputPath;
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.error(
       '[OLIVIA ASYNC RENDER ERROR]',
       error
@@ -248,7 +286,9 @@ async function runRenderInBackground(job) {
       error.stderr
         ? String(
             error.stderr
-          ).slice(-12000)
+          ).slice(
+            -12000
+          )
         : null;
   }
 }
@@ -282,12 +322,18 @@ function json(
     }
   );
 
-  res.end(payload);
+  res.end(
+    payload
+  );
 }
 
 
-function authorized(req) {
-  if (!WORKER_TOKEN) {
+function authorized(
+  req
+) {
+  if (
+    !WORKER_TOKEN
+  ) {
     return true;
   }
 
@@ -298,14 +344,20 @@ function authorized(req) {
 }
 
 
-async function readJson(req) {
-  let total = 0;
-  const chunks = [];
+async function readRawBody(
+  req
+) {
+  let total =
+    0;
+
+  const chunks =
+    [];
 
   for await (
     const chunk of req
   ) {
-    total += chunk.length;
+    total +=
+      chunk.length;
 
     if (
       total >
@@ -316,20 +368,35 @@ async function readJson(req) {
           'Request body too large.'
         ),
         {
-          status: 413
+          status:
+            413
         }
       );
     }
 
-    chunks.push(chunk);
+    chunks.push(
+      chunk
+    );
   }
 
+  return Buffer.concat(
+    chunks
+  );
+}
+
+
+async function readJson(
+  req
+) {
   const raw =
-    Buffer.concat(chunks)
-      .toString('utf8');
+    await readRawBody(
+      req
+    );
 
   return JSON.parse(
-    raw || '{}'
+    raw.toString(
+      'utf8'
+    ) || '{}'
   );
 }
 
@@ -340,10 +407,13 @@ async function ffmpegVersion() {
       const child =
         spawn(
           'ffmpeg',
-          ['-version']
+          [
+            '-version'
+          ]
         );
 
-      let out = '';
+      let out =
+        '';
 
       child.stdout.on(
         'data',
@@ -356,7 +426,9 @@ async function ffmpegVersion() {
       child.on(
         'error',
         () =>
-          resolve(null)
+          resolve(
+            null
+          )
       );
 
       child.on(
@@ -364,7 +436,9 @@ async function ffmpegVersion() {
         code =>
           resolve(
             code === 0
-              ? out.split('\n')[0]
+              ? out.split(
+                  '\n'
+                )[0]
               : null
           )
       );
@@ -479,7 +553,9 @@ async function serveOutput(
 
     createReadStream(
       filePath
-    ).pipe(res);
+    ).pipe(
+      res
+    );
 
   } catch {
     json(
@@ -552,7 +628,9 @@ async function serveDownload(
 
     createReadStream(
       filePath
-    ).pipe(res);
+    ).pipe(
+      res
+    );
 
   } catch {
     json(
@@ -580,7 +658,9 @@ function textValue(
     value === undefined ||
     value === null
       ? ''
-      : String(value);
+      : String(
+          value
+        );
 
   const trimmed =
     raw.trim();
@@ -605,9 +685,16 @@ function cleanYouTubeTitle(
     );
 
   return (
-    Array.from(cleaned)
-      .slice(0, 100)
-      .join('') ||
+    Array.from(
+      cleaned
+    )
+      .slice(
+        0,
+        100
+      )
+      .join(
+        ''
+      ) ||
     'UploadPilot video'
   );
 }
@@ -619,36 +706,42 @@ function truncateUtf8(
 ) {
   const source =
     String(
-      value || ''
+      value ||
+      ''
     );
 
   if (
     Buffer.byteLength(
       source,
       'utf8'
-    ) <= maxBytes
+    ) <=
+    maxBytes
   ) {
     return source;
   }
 
-  let result = '';
+  let result =
+    '';
 
   for (
     const ch of source
   ) {
     const next =
-      result + ch;
+      result +
+      ch;
 
     if (
       Buffer.byteLength(
         next,
         'utf8'
-      ) > maxBytes
+      ) >
+      maxBytes
     ) {
       break;
     }
 
-    result = next;
+    result =
+      next;
   }
 
   return result;
@@ -660,7 +753,8 @@ function cleanYouTubeDescription(
 ) {
   return truncateUtf8(
     String(
-      value || ''
+      value ||
+      ''
     ).replace(
       /[<>]/g,
       ''
@@ -680,9 +774,12 @@ function cleanYouTubePrivacy(
     ).toLowerCase();
 
   if (
-    privacy === 'public' ||
-    privacy === 'private' ||
-    privacy === 'unlisted'
+    privacy ===
+      'public' ||
+    privacy ===
+      'private' ||
+    privacy ===
+      'unlisted'
   ) {
     return privacy;
   }
@@ -728,7 +825,9 @@ function booleanValue(
   }
 
   const raw =
-    String(value)
+    String(
+      value
+    )
       .trim()
       .toLowerCase();
 
@@ -737,7 +836,9 @@ function booleanValue(
       'true',
       'yes',
       '1'
-    ].includes(raw)
+    ].includes(
+      raw
+    )
   ) {
     return true;
   }
@@ -747,7 +848,9 @@ function booleanValue(
       'false',
       'no',
       '0'
-    ].includes(raw)
+    ].includes(
+      raw
+    )
   ) {
     return false;
   }
@@ -773,14 +876,17 @@ async function resolveYouTubeOutput(
         'YouTube upload requires filename or render_url.'
       ),
       {
-        status: 400,
+        status:
+          400,
+
         code:
           'YOUTUBE_OUTPUT_REQUIRED'
       }
     );
   }
 
-  let name = '';
+  let name =
+    '';
 
   try {
     const parsed =
@@ -815,7 +921,9 @@ async function resolveYouTubeOutput(
         'Invalid YouTube output filename.'
       ),
       {
-        status: 400,
+        status:
+          400,
+
         code:
           'YOUTUBE_OUTPUT_INVALID'
       }
@@ -842,7 +950,9 @@ async function resolveYouTubeOutput(
         'Rendered MP4 was not found on the worker.'
       ),
       {
-        status: 404,
+        status:
+          404,
+
         code:
           'YOUTUBE_OUTPUT_NOT_FOUND',
 
@@ -856,14 +966,17 @@ async function resolveYouTubeOutput(
 
   if (
     !info.isFile() ||
-    info.size <= 0
+    info.size <=
+      0
   ) {
     throw Object.assign(
       new Error(
         'Rendered MP4 is not a valid file.'
       ),
       {
-        status: 422,
+        status:
+          422,
+
         code:
           'YOUTUBE_OUTPUT_INVALID_FILE',
 
@@ -903,7 +1016,9 @@ function requestBuffer(
       const targetUrl =
         target instanceof URL
           ? target
-          : new URL(target);
+          : new URL(
+              target
+            );
 
       const client =
         targetUrl.protocol ===
@@ -919,7 +1034,8 @@ function requestBuffer(
             headers
           },
           response => {
-            const chunks = [];
+            const chunks =
+              [];
 
             response.on(
               'data',
@@ -959,7 +1075,9 @@ function requestBuffer(
       );
 
       if (body) {
-        req.write(body);
+        req.write(
+          body
+        );
       }
 
       req.end();
@@ -984,7 +1102,9 @@ function uploadFileToUrl(
       reject
     ) => {
       const targetUrl =
-        new URL(target);
+        new URL(
+          target
+        );
 
       const client =
         targetUrl.protocol ===
@@ -1011,7 +1131,8 @@ function uploadFileToUrl(
             }
           },
           response => {
-            const chunks = [];
+            const chunks =
+              [];
 
             response.on(
               'data',
@@ -1064,7 +1185,9 @@ function uploadFileToUrl(
         }
       );
 
-      stream.pipe(req);
+      stream.pipe(
+        req
+      );
     }
   );
 }
@@ -1112,7 +1235,9 @@ function youtubeApiError(
       message
     ),
     {
-      status: 502,
+      status:
+        502,
+
       code,
 
       details: {
@@ -1147,7 +1272,9 @@ async function uploadRenderedVideoToYouTube(
         'YouTube access_token is required.'
       ),
       {
-        status: 400,
+        status:
+          400,
+
         code:
           'YOUTUBE_ACCESS_TOKEN_REQUIRED'
       }
@@ -1282,7 +1409,9 @@ async function uploadRenderedVideoToYouTube(
         'YouTube did not return a resumable upload URL.'
       ),
       {
-        status: 502,
+        status:
+          502,
+
         code:
           'YOUTUBE_SESSION_LOCATION_MISSING'
       }
@@ -1342,7 +1471,9 @@ async function uploadRenderedVideoToYouTube(
         'YouTube upload completed without returning a video id.'
       ),
       {
-        status: 502,
+        status:
+          502,
+
         code:
           'YOUTUBE_VIDEO_ID_MISSING',
 
@@ -1387,6 +1518,766 @@ async function uploadRenderedVideoToYouTube(
 
     video
   };
+}
+
+
+/* =========================================================
+   DODO PAYMENTS WEBHOOK HELPERS
+
+   - Verifies Standard Webhooks signatures with raw body bytes.
+   - Rejects stale/future timestamps outside a 5 minute window.
+   - Normalises Dodo events before forwarding them to Bubble.
+========================================================= */
+
+
+function decodeDodoWebhookSecret(
+  secret
+) {
+  let value =
+    String(
+      secret ||
+      ''
+    ).trim();
+
+  if (
+    value.startsWith(
+      'whsec_'
+    )
+  ) {
+    value =
+      value.slice(
+        'whsec_'.length
+      );
+  }
+
+  if (!value) {
+    throw new Error(
+      'DODO_WEBHOOK_SECRET is not configured.'
+    );
+  }
+
+  const key =
+    Buffer.from(
+      value,
+      'base64'
+    );
+
+  if (!key.length) {
+    throw new Error(
+      'DODO_WEBHOOK_SECRET is invalid.'
+    );
+  }
+
+  return key;
+}
+
+
+function verifyDodoWebhook(
+  rawBody,
+  headers
+) {
+  const webhookId =
+    String(
+      headers[
+        'webhook-id'
+      ] ||
+      ''
+    ).trim();
+
+  const timestampRaw =
+    String(
+      headers[
+        'webhook-timestamp'
+      ] ||
+      ''
+    ).trim();
+
+  const signatureHeader =
+    String(
+      headers[
+        'webhook-signature'
+      ] ||
+      ''
+    ).trim();
+
+  if (
+    !webhookId ||
+    !timestampRaw ||
+    !signatureHeader
+  ) {
+    throw Object.assign(
+      new Error(
+        'Missing Dodo webhook signature headers.'
+      ),
+      {
+        status:
+          401,
+
+        code:
+          'DODO_WEBHOOK_HEADERS_MISSING'
+      }
+    );
+  }
+
+  const timestamp =
+    Number(
+      timestampRaw
+    );
+
+  if (
+    !Number.isFinite(
+      timestamp
+    )
+  ) {
+    throw Object.assign(
+      new Error(
+        'Invalid Dodo webhook timestamp.'
+      ),
+      {
+        status:
+          401,
+
+        code:
+          'DODO_WEBHOOK_TIMESTAMP_INVALID'
+      }
+    );
+  }
+
+  const now =
+    Math.floor(
+      Date.now() /
+      1000
+    );
+
+  if (
+    now -
+    timestamp >
+    DODO_WEBHOOK_TOLERANCE_SECONDS
+  ) {
+    throw Object.assign(
+      new Error(
+        'Dodo webhook timestamp is too old.'
+      ),
+      {
+        status:
+          401,
+
+        code:
+          'DODO_WEBHOOK_TIMESTAMP_OLD'
+      }
+    );
+  }
+
+  if (
+    timestamp -
+    now >
+    DODO_WEBHOOK_TOLERANCE_SECONDS
+  ) {
+    throw Object.assign(
+      new Error(
+        'Dodo webhook timestamp is too far in the future.'
+      ),
+      {
+        status:
+          401,
+
+        code:
+          'DODO_WEBHOOK_TIMESTAMP_FUTURE'
+      }
+    );
+  }
+
+  const key =
+    decodeDodoWebhookSecret(
+      DODO_WEBHOOK_SECRET
+    );
+
+  const prefix =
+    Buffer.from(
+      `${webhookId}.${timestampRaw}.`,
+      'utf8'
+    );
+
+  const signedPayload =
+    Buffer.concat([
+      prefix,
+      rawBody
+    ]);
+
+  const expected =
+    createHmac(
+      'sha256',
+      key
+    )
+      .update(
+        signedPayload
+      )
+      .digest();
+
+  const candidates =
+    signatureHeader
+      .split(
+        /\s+/
+      )
+      .filter(
+        Boolean
+      );
+
+  const valid =
+    candidates.some(
+      entry => {
+        const comma =
+          entry.indexOf(
+            ','
+          );
+
+        if (
+          comma <= 0
+        ) {
+          return false;
+        }
+
+        const version =
+          entry.slice(
+            0,
+            comma
+          );
+
+        const encoded =
+          entry.slice(
+            comma + 1
+          );
+
+        if (
+          version !==
+            'v1' ||
+          !encoded
+        ) {
+          return false;
+        }
+
+        let supplied;
+
+        try {
+          supplied =
+            Buffer.from(
+              encoded,
+              'base64'
+            );
+
+        } catch {
+          return false;
+        }
+
+        return (
+          supplied.length ===
+            expected.length &&
+          timingSafeEqual(
+            supplied,
+            expected
+          )
+        );
+      }
+    );
+
+  if (!valid) {
+    throw Object.assign(
+      new Error(
+        'Invalid Dodo webhook signature.'
+      ),
+      {
+        status:
+          401,
+
+        code:
+          'DODO_WEBHOOK_SIGNATURE_INVALID'
+      }
+    );
+  }
+
+  return webhookId;
+}
+
+
+function dodoChallengeResponse(
+  challenge
+) {
+  const key =
+    decodeDodoWebhookSecret(
+      DODO_WEBHOOK_SECRET
+    );
+
+  const verificationKey =
+    createHmac(
+      'sha256',
+      key
+    )
+      .update(
+        'wev-v1',
+        'utf8'
+      )
+      .digest();
+
+  const signature =
+    createHmac(
+      'sha256',
+      verificationKey
+    )
+      .update(
+        String(
+          challenge
+        ),
+        'utf8'
+      )
+      .digest(
+        'base64'
+      );
+
+  return `v1,${signature}`;
+}
+
+
+function moneyFromMinorUnits(
+  amount,
+  currency
+) {
+  const value =
+    Number(
+      amount
+    );
+
+  if (
+    !Number.isFinite(
+      value
+    )
+  ) {
+    return 0;
+  }
+
+  const zeroDecimal =
+    new Set([
+      'BIF',
+      'CLP',
+      'DJF',
+      'GNF',
+      'JPY',
+      'KMF',
+      'KRW',
+      'MGA',
+      'PYG',
+      'RWF',
+      'UGX',
+      'VND',
+      'VUV',
+      'XAF',
+      'XOF',
+      'XPF'
+    ]);
+
+  return zeroDecimal.has(
+    String(
+      currency ||
+      ''
+    ).toUpperCase()
+  )
+    ? value
+    : value / 100;
+}
+
+
+function normaliseDodoEvent(
+  event,
+  webhookId
+) {
+  const data =
+    event &&
+    typeof event ===
+      'object'
+      ? (
+          event.data ||
+          {}
+        )
+      : {};
+
+  const metadata =
+    data &&
+    typeof data.metadata ===
+      'object' &&
+    data.metadata
+      ? data.metadata
+      : {};
+
+  const customer =
+    data &&
+    typeof data.customer ===
+      'object' &&
+    data.customer
+      ? data.customer
+      : {};
+
+  const eventType =
+    textValue(
+      event &&
+      event.type
+    );
+
+  const currency =
+    textValue(
+      data.currency
+    ).toUpperCase();
+
+  const amount =
+    moneyFromMinorUnits(
+      data.recurring_pre_tax_amount,
+      currency
+    );
+
+  return {
+    event_type:
+      eventType,
+
+    provider_event_id:
+      webhookId,
+
+    provider:
+      'Dodo',
+
+    bubble_user_id:
+      textValue(
+        metadata.bubble_user_id ||
+        metadata.bubbleUserId ||
+        metadata.user_id ||
+        metadata.userId
+      ),
+
+    plan:
+      textValue(
+        metadata.plan
+      ),
+
+    billing_customer_id:
+      textValue(
+        customer.customer_id
+      ),
+
+    billing_subscription_id:
+      textValue(
+        data.subscription_id
+      ),
+
+    provider_payment_id:
+      textValue(
+        data.payment_id
+      ),
+
+    product_id:
+      textValue(
+        data.product_id
+      ),
+
+    renewal_date:
+      textValue(
+        data.next_billing_date ||
+        data.expires_at
+      ),
+
+    amount,
+
+    currency,
+
+    subscription_status:
+      textValue(
+        data.status
+      ),
+
+    customer_email:
+      textValue(
+        customer.email
+      ),
+
+    occurred_at:
+      textValue(
+        event &&
+        event.timestamp
+      ),
+
+    raw_payload_type:
+      textValue(
+        data.payload_type
+      )
+  };
+}
+
+
+async function forwardDodoEventToBubble(
+  payload
+) {
+  if (
+    !BUBBLE_DODO_WEBHOOK_URL
+  ) {
+    throw Object.assign(
+      new Error(
+        'BUBBLE_DODO_WEBHOOK_URL is not configured.'
+      ),
+      {
+        status:
+          503,
+
+        code:
+          'BUBBLE_DODO_URL_MISSING'
+      }
+    );
+  }
+
+  if (
+    !BUBBLE_DODO_WEBHOOK_TOKEN
+  ) {
+    throw Object.assign(
+      new Error(
+        'BUBBLE_DODO_WEBHOOK_TOKEN is not configured.'
+      ),
+      {
+        status:
+          503,
+
+        code:
+          'BUBBLE_DODO_TOKEN_MISSING'
+      }
+    );
+  }
+
+  const body =
+    Buffer.from(
+      JSON.stringify({
+        ...payload,
+
+        relay_token:
+          BUBBLE_DODO_WEBHOOK_TOKEN
+      })
+    );
+
+  const response =
+    await requestBuffer(
+      BUBBLE_DODO_WEBHOOK_URL,
+      {
+        method:
+          'POST',
+
+        headers: {
+          'content-type':
+            'application/json; charset=utf-8',
+
+          'content-length':
+            body.length
+        },
+
+        body
+      }
+    );
+
+  if (
+    response.status <
+      200 ||
+    response.status >=
+      300
+  ) {
+    throw Object.assign(
+      new Error(
+        `Bubble Dodo relay returned HTTP ${response.status}.`
+      ),
+      {
+        status:
+          502,
+
+        code:
+          'BUBBLE_DODO_RELAY_FAILED',
+
+        details: {
+          bubbleStatus:
+            response.status,
+
+          bubbleResponse:
+            response.body
+        }
+      }
+    );
+  }
+
+  return response;
+}
+
+
+async function handleDodoWebhook(
+  req,
+  res
+) {
+  const challenge =
+    textValue(
+      req.headers[
+        'webhook-challenge'
+      ]
+    );
+
+  if (challenge) {
+    if (
+      !DODO_WEBHOOK_SECRET
+    ) {
+      return json(
+        res,
+        503,
+        {
+          ok:
+            false,
+
+          error:
+            'DODO_WEBHOOK_SECRET is not configured.',
+
+          code:
+            'DODO_WEBHOOK_SECRET_MISSING'
+        }
+      );
+    }
+
+    const challengeResponse =
+      dodoChallengeResponse(
+        challenge
+      );
+
+    const payload =
+      Buffer.from(
+        JSON.stringify({
+          ok:
+            true,
+
+          challenge:
+            true
+        })
+      );
+
+    res.writeHead(
+      200,
+      {
+        'content-type':
+          'application/json; charset=utf-8',
+
+        'content-length':
+          payload.length,
+
+        'cache-control':
+          'no-store',
+
+        'webhook-challenge-response':
+          challengeResponse
+      }
+    );
+
+    return res.end(
+      payload
+    );
+  }
+
+  if (
+    !DODO_WEBHOOK_SECRET
+  ) {
+    return json(
+      res,
+      503,
+      {
+        ok:
+          false,
+
+        error:
+          'DODO_WEBHOOK_SECRET is not configured.',
+
+        code:
+          'DODO_WEBHOOK_SECRET_MISSING'
+      }
+    );
+  }
+
+  const rawBody =
+    await readRawBody(
+      req
+    );
+
+  const webhookId =
+    verifyDodoWebhook(
+      rawBody,
+      req.headers
+    );
+
+  let event;
+
+  try {
+    event =
+      JSON.parse(
+        rawBody.toString(
+          'utf8'
+        ) || '{}'
+      );
+
+  } catch {
+    throw Object.assign(
+      new Error(
+        'Invalid JSON in Dodo webhook body.'
+      ),
+      {
+        status:
+          400,
+
+        code:
+          'DODO_WEBHOOK_JSON_INVALID'
+      }
+    );
+  }
+
+  const normalised =
+    normaliseDodoEvent(
+      event,
+      webhookId
+    );
+
+  console.log(
+    '[DODO WEBHOOK VERIFIED]',
+    JSON.stringify({
+      event_type:
+        normalised.event_type,
+
+      provider_event_id:
+        normalised.provider_event_id,
+
+      bubble_user_id:
+        normalised.bubble_user_id,
+
+      plan:
+        normalised.plan,
+
+      billing_subscription_id:
+        normalised.billing_subscription_id
+    })
+  );
+
+  await forwardDodoEventToBubble(
+    normalised
+  );
+
+  return json(
+    res,
+    200,
+    {
+      ok:
+        true,
+
+      received:
+        true,
+
+      event_type:
+        normalised.event_type,
+
+      provider_event_id:
+        normalised.provider_event_id
+    }
+  );
 }
 
 
@@ -1437,7 +2328,7 @@ const server =
               'olivia-render-worker',
 
             worker:
-              'V128-YOUTUBE-UPLOAD',
+              'V129-DODO-WEBHOOK',
 
             ffmpeg:
               version
@@ -1484,12 +2375,63 @@ const server =
       }
 
 
+      /*
+        Dodo must reach this route without WORKER_TOKEN.
+        Security is provided by Dodo's verified webhook signature.
+      */
+
+      if (
+        req.method ===
+          'POST' &&
+        url.pathname ===
+          '/dodo/webhook'
+      ) {
+        try {
+          return await handleDodoWebhook(
+            req,
+            res
+          );
+
+        } catch (
+          error
+        ) {
+          console.error(
+            '[DODO WEBHOOK ERROR]',
+            error
+          );
+
+          return json(
+            res,
+            error.status ||
+              500,
+            {
+              ok:
+                false,
+
+              error:
+                error.message,
+
+              code:
+                error.code ||
+                'DODO_WEBHOOK_FAILED',
+
+              details:
+                error.details ||
+                null
+            }
+          );
+        }
+      }
+
+
       /* -----------------------------------------------------
          PRIVATE ROUTES REQUIRE WORKER TOKEN
       ----------------------------------------------------- */
 
       if (
-        !authorized(req)
+        !authorized(
+          req
+        )
       ) {
         return json(
           res,
