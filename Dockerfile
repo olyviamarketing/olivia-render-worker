@@ -5,13 +5,18 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
 COPY package.json ./
+
+RUN npm install --omit=dev
+
 COPY src ./src
 
 RUN mkdir -p /data/outputs
 
 ENV PORT=8080
 ENV OUTPUT_DIR=/data/outputs
+
 EXPOSE 8080
 
 CMD ["node", "src/server.js"]
