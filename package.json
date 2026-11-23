@@ -12,6 +12,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "dodopayments": "^2.62.0"
+    "dodopayments": "^2.63.1"
   }
 }
