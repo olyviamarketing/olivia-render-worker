@@ -5,6 +5,7 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import DodoPayments from 'dodopayments';
 import {
   renderJob,
   validateJob,
@@ -17,11 +18,7 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR || '/data/outputs';
 const MAX_BODY_BYTES = Number(
   process.env.MAX_BODY_BYTES || 8_000_000
 );
-
-const WORKER_TOKEN = String(
-  process.env.WORKER_TOKEN || ''
-);
-
+const WORKER_TOKEN = String(process.env.WORKER_TOKEN || '');
 const PUBLIC_BASE_URL = String(
   process.env.PUBLIC_BASE_URL || ''
 ).replace(/\/$/, '');
@@ -38,12 +35,16 @@ const BUBBLE_DODO_WEBHOOK_TOKEN = String(
   process.env.BUBBLE_DODO_WEBHOOK_TOKEN || ''
 ).trim();
 
-const DODO_WEBHOOK_TOLERANCE_SECONDS =
-  5 * 60;
+const DODO_WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 
-const renderJobs =
-  new Map();
+const dodoWebhookClient = new DodoPayments({
+  // Dodo's client requires a bearer token at construction time.
+  // We only use the local webhook verifier here; no API request is made.
+  bearerToken: 'webhook-verification-only',
+  webhookKey: DODO_WEBHOOK_SECRET || null
+});
 
+const renderJobs = new Map();
 
 function publicOutputUrl(filename) {
   return PUBLIC_BASE_URL
@@ -51,13 +52,11 @@ function publicOutputUrl(filename) {
     : `/outputs/${filename}`;
 }
 
-
 function publicDownloadUrl(filename) {
   return PUBLIC_BASE_URL
     ? `${PUBLIC_BASE_URL}/download/${filename}`
     : `/download/${filename}`;
 }
-
 
 function publicStatusUrl(jobId) {
   return PUBLIC_BASE_URL
@@ -65,46 +64,25 @@ function publicStatusUrl(jobId) {
     : `/render/status/${encodeURIComponent(jobId)}`;
 }
 
-
 function safeJobId(job) {
-  const raw =
-    String(
-      job &&
-      job.jobId ||
-      ''
-    ).trim();
+  const raw = String(job && job.jobId || '').trim();
 
-  return (
-    raw ||
+  return raw ||
     `olivia-${Date.now().toString(36)}-${Math.random()
       .toString(36)
-      .slice(2, 10)}`
-  );
+      .slice(2, 10)}`;
 }
 
+function normaliseProgress(value, fallback = 0) {
+  const n = Number(value);
 
-function normaliseProgress(
-  value,
-  fallback = 0
-) {
-  const n =
-    Number(value);
-
-  if (
-    !Number.isFinite(n)
-  ) {
-    return fallback;
-  }
+  if (!Number.isFinite(n)) return fallback;
 
   return Math.max(
     0,
-    Math.min(
-      100,
-      Math.round(n)
-    )
+    Math.min(100, Math.round(n))
   );
 }
-
 
 function updateJobProgress(
   state,
@@ -112,63 +90,36 @@ function updateJobProgress(
   phase,
   detail = null
 ) {
-  if (!state) {
-    return;
-  }
+  if (!state) return;
 
-  const next =
-    normaliseProgress(
-      value,
-      state.progress || 0
-    );
+  const next = normaliseProgress(
+    value,
+    state.progress || 0
+  );
 
-  if (
-    next >=
-    (state.progress || 0)
-  ) {
-    state.progress =
-      next;
+  if (next >= (state.progress || 0)) {
+    state.progress = next;
   }
 
   if (phase) {
-    state.phase =
-      String(phase);
+    state.phase = String(phase);
   }
 
-  if (
-    detail !== undefined
-  ) {
-    state.progressDetail =
-      detail;
+  if (detail !== undefined) {
+    state.progressDetail = detail;
   }
 
-  state.updatedAt =
-    new Date()
-      .toISOString();
+  state.updatedAt = new Date().toISOString();
 }
 
+async function runRenderInBackground(job) {
+  const jobId = safeJobId(job);
+  const state = renderJobs.get(jobId);
 
-async function runRenderInBackground(
-  job
-) {
-  const jobId =
-    safeJobId(job);
+  if (!state) return;
 
-  const state =
-    renderJobs.get(
-      jobId
-    );
-
-  if (!state) {
-    return;
-  }
-
-  state.status =
-    'processing';
-
-  state.startedAt =
-    new Date()
-      .toISOString();
+  state.status = 'processing';
+  state.startedAt = new Date().toISOString();
 
   updateJobProgress(
     state,
@@ -177,38 +128,26 @@ async function runRenderInBackground(
   );
 
   try {
-    const started =
-      Date.now();
+    const started = Date.now();
 
-    const result =
-      await renderJob(
-        job,
-        {
-          outputDir:
-            OUTPUT_DIR,
+    const result = await renderJob(job, {
+      outputDir: OUTPUT_DIR,
 
-          onProgress(
-            progress,
-            phase,
-            detail
-          ) {
-            updateJobProgress(
-              state,
-              progress,
-              phase,
-              detail
-            );
-          }
-        }
-      );
+      onProgress(progress, phase, detail) {
+        updateJobProgress(
+          state,
+          progress,
+          phase,
+          detail
+        );
+      }
+    });
 
-    const filename =
-      path.basename(
-        result.outputPath
-      );
+    const filename = path.basename(
+      result.outputPath
+    );
 
-    state.status =
-      'completed';
+    state.status = 'completed';
 
     updateJobProgress(
       state,
@@ -217,125 +156,67 @@ async function runRenderInBackground(
     );
 
     state.completedAt =
-      new Date()
-        .toISOString();
+      new Date().toISOString();
 
     state.elapsedMs =
-      Date.now() -
-      started;
+      Date.now() - started;
 
     state.outputUrl =
-      publicOutputUrl(
-        filename
-      );
+      publicOutputUrl(filename);
 
     state.downloadUrl =
-      publicDownloadUrl(
-        filename
-      );
+      publicDownloadUrl(filename);
 
     state.result = {
       ...result,
-
-      outputUrl:
-        state.outputUrl,
-
-      downloadUrl:
-        state.downloadUrl,
-
-      elapsedMs:
-        state.elapsedMs
+      outputUrl: state.outputUrl,
+      downloadUrl: state.downloadUrl,
+      elapsedMs: state.elapsedMs
     };
 
     delete state.result.outputPath;
 
-  } catch (
-    error
-  ) {
+  } catch (error) {
     console.error(
       '[OLIVIA ASYNC RENDER ERROR]',
       error
     );
 
-    state.status =
-      'failed';
-
-    state.phase =
-      'failed';
-
+    state.status = 'failed';
+    state.phase = 'failed';
     state.updatedAt =
-      new Date()
-        .toISOString();
-
+      new Date().toISOString();
     state.completedAt =
-      new Date()
-        .toISOString();
-
-    state.error =
-      error.message;
-
+      new Date().toISOString();
+    state.error = error.message;
     state.code =
-      error.code ||
-      'RENDER_FAILED';
-
+      error.code || 'RENDER_FAILED';
     state.details =
-      error.details ||
-      null;
-
+      error.details || null;
     state.ffmpeg =
       error.stderr
-        ? String(
-            error.stderr
-          ).slice(
-            -12000
-          )
+        ? String(error.stderr).slice(-12000)
         : null;
   }
 }
 
-
-function json(
-  res,
-  status,
-  body
-) {
-  const payload =
-    Buffer.from(
-      JSON.stringify(
-        body,
-        null,
-        2
-      )
-    );
-
-  res.writeHead(
-    status,
-    {
-      'content-type':
-        'application/json; charset=utf-8',
-
-      'content-length':
-        payload.length,
-
-      'cache-control':
-        'no-store'
-    }
+function json(res, status, body) {
+  const payload = Buffer.from(
+    JSON.stringify(body, null, 2)
   );
 
-  res.end(
-    payload
-  );
+  res.writeHead(status, {
+    'content-type':
+      'application/json; charset=utf-8',
+    'content-length': payload.length,
+    'cache-control': 'no-store'
+  });
+
+  res.end(payload);
 }
 
-
-function authorized(
-  req
-) {
-  if (
-    !WORKER_TOKEN
-  ) {
-    return true;
-  }
+function authorized(req) {
+  if (!WORKER_TOKEN) return true;
 
   return (
     req.headers.authorization ===
@@ -343,443 +224,242 @@ function authorized(
   );
 }
 
+async function readRawBody(req) {
+  let total = 0;
+  const chunks = [];
 
-async function readRawBody(
-  req
-) {
-  let total =
-    0;
+  for await (const chunk of req) {
+    total += chunk.length;
 
-  const chunks =
-    [];
-
-  for await (
-    const chunk of req
-  ) {
-    total +=
-      chunk.length;
-
-    if (
-      total >
-      MAX_BODY_BYTES
-    ) {
+    if (total > MAX_BODY_BYTES) {
       throw Object.assign(
-        new Error(
-          'Request body too large.'
-        ),
-        {
-          status:
-            413
-        }
+        new Error('Request body too large.'),
+        { status: 413 }
       );
     }
 
-    chunks.push(
-      chunk
-    );
+    chunks.push(chunk);
   }
 
-  return Buffer.concat(
-    chunks
-  );
+  return Buffer.concat(chunks);
 }
 
-
-async function readJson(
-  req
-) {
-  const raw =
-    await readRawBody(
-      req
-    );
-
-  return JSON.parse(
-    raw.toString(
-      'utf8'
-    ) || '{}'
-  );
+async function readJson(req) {
+  const raw = await readRawBody(req);
+  return JSON.parse(raw.toString('utf8') || '{}');
 }
-
 
 async function ffmpegVersion() {
-  return new Promise(
-    resolve => {
-      const child =
-        spawn(
-          'ffmpeg',
-          [
-            '-version'
-          ]
-        );
+  return new Promise(resolve => {
+    const child = spawn(
+      'ffmpeg',
+      ['-version']
+    );
 
-      let out =
-        '';
+    let out = '';
 
-      child.stdout.on(
-        'data',
-        d => {
-          out +=
-            d.toString();
-        }
-      );
+    child.stdout.on('data', d => {
+      out += d.toString();
+    });
 
-      child.on(
-        'error',
-        () =>
-          resolve(
-            null
-          )
-      );
+    child.on('error', () =>
+      resolve(null)
+    );
 
-      child.on(
-        'close',
-        code =>
-          resolve(
-            code === 0
-              ? out.split(
-                  '\n'
-                )[0]
-              : null
-          )
-      );
-    }
-  );
+    child.on('close', code =>
+      resolve(
+        code === 0
+          ? out.split('\n')[0]
+          : null
+      )
+    );
+  });
 }
-
 
 async function serveOutput(
   req,
   res,
   pathname
 ) {
-  const name =
-    path.basename(
-      pathname.slice(
-        '/outputs/'.length
-      )
-    );
+  const name = path.basename(
+    pathname.slice('/outputs/'.length)
+  );
 
   const tiktokVerifyFile =
     'tiktokF53uDBD6DYx1YzQK6GvmhwU2Gz2uijSx.txt';
 
-  // TikTok URL-prefix verification file
-  if (
-    name ===
-    tiktokVerifyFile
-  ) {
+  if (name === tiktokVerifyFile) {
     try {
-      const contents =
-        await readFile(
-          new URL(
-            `./${tiktokVerifyFile}`,
-            import.meta.url
-          )
-        );
-
-      res.writeHead(
-        200,
-        {
-          'content-type':
-            'text/plain; charset=utf-8',
-
-          'content-length':
-            contents.length,
-
-          'cache-control':
-            'no-store'
-        }
+      const contents = await readFile(
+        new URL(
+          `./${tiktokVerifyFile}`,
+          import.meta.url
+        )
       );
 
-      return res.end(
-        contents
-      );
+      res.writeHead(200, {
+        'content-type':
+          'text/plain; charset=utf-8',
+        'content-length':
+          contents.length,
+        'cache-control':
+          'no-store'
+      });
+
+      return res.end(contents);
 
     } catch {
-      return json(
-        res,
-        404,
-        {
-          error:
-            'TikTok verification file not found.'
-        }
-      );
+      return json(res, 404, {
+        error:
+          'TikTok verification file not found.'
+      });
     }
   }
 
-  // Normal OLIVIA rendered videos
   if (
-    !/^[a-zA-Z0-9._-]+\.mp4$/.test(
-      name
-    )
+    !/^[a-zA-Z0-9._-]+\.mp4$/.test(name)
   ) {
-    return json(
-      res,
-      400,
-      {
-        error:
-          'Invalid output name.'
-      }
-    );
+    return json(res, 400, {
+      error: 'Invalid output name.'
+    });
   }
 
-  const filePath =
-    path.join(
-      OUTPUT_DIR,
-      name
-    );
+  const filePath = path.join(
+    OUTPUT_DIR,
+    name
+  );
 
   try {
-    const info =
-      await stat(
-        filePath
-      );
+    const info = await stat(filePath);
 
-    res.writeHead(
-      200,
-      {
-        'content-type':
-          'video/mp4',
-
-        'content-length':
-          info.size,
-
-        'accept-ranges':
-          'bytes',
-
-        'cache-control':
-          'private, max-age=3600'
-      }
-    );
+    res.writeHead(200, {
+      'content-type':
+        'video/mp4',
+      'content-length':
+        info.size,
+      'accept-ranges':
+        'bytes',
+      'cache-control':
+        'private, max-age=3600'
+    });
 
     createReadStream(
       filePath
-    ).pipe(
-      res
-    );
+    ).pipe(res);
 
   } catch {
-    json(
-      res,
-      404,
-      {
-        error:
-          'Output not found.'
-      }
-    );
+    json(res, 404, {
+      error: 'Output not found.'
+    });
   }
 }
-
 
 async function serveDownload(
   req,
   res,
   pathname
 ) {
-  const name =
-    path.basename(
-      pathname.slice(
-        '/download/'.length
-      )
-    );
+  const name = path.basename(
+    pathname.slice('/download/'.length)
+  );
 
   if (
-    !/^[a-zA-Z0-9._-]+\.mp4$/.test(
-      name
-    )
+    !/^[a-zA-Z0-9._-]+\.mp4$/.test(name)
   ) {
-    return json(
-      res,
-      400,
-      {
-        error:
-          'Invalid output name.'
-      }
-    );
+    return json(res, 400, {
+      error: 'Invalid output name.'
+    });
   }
 
-  const filePath =
-    path.join(
-      OUTPUT_DIR,
-      name
-    );
+  const filePath = path.join(
+    OUTPUT_DIR,
+    name
+  );
 
   try {
-    const info =
-      await stat(
-        filePath
-      );
+    const info = await stat(filePath);
 
-    res.writeHead(
-      200,
-      {
-        'content-type':
-          'video/mp4',
-
-        'content-length':
-          info.size,
-
-        'content-disposition':
-          `attachment; filename="${name}"`,
-
-        'cache-control':
-          'private, no-store'
-      }
-    );
+    res.writeHead(200, {
+      'content-type':
+        'video/mp4',
+      'content-length':
+        info.size,
+      'content-disposition':
+        `attachment; filename="${name}"`,
+      'cache-control':
+        'private, no-store'
+    });
 
     createReadStream(
       filePath
-    ).pipe(
-      res
-    );
+    ).pipe(res);
 
   } catch {
-    json(
-      res,
-      404,
-      {
-        error:
-          'Output not found.'
-      }
-    );
+    json(res, 404, {
+      error: 'Output not found.'
+    });
   }
 }
 
+function textValue(value, fallback = '') {
+  const raw = value === undefined || value === null
+    ? ''
+    : String(value);
 
-/* =========================================================
-   YOUTUBE UPLOAD HELPERS
-========================================================= */
-
-
-function textValue(
-  value,
-  fallback = ''
-) {
-  const raw =
-    value === undefined ||
-    value === null
-      ? ''
-      : String(
-          value
-        );
-
-  const trimmed =
-    raw.trim();
-
-  return (
-    trimmed ||
-    fallback
-  );
+  const trimmed = raw.trim();
+  return trimmed || fallback;
 }
 
-
-function cleanYouTubeTitle(
-  value
-) {
-  const cleaned =
-    textValue(
-      value,
-      'UploadPilot video'
-    ).replace(
-      /[<>]/g,
-      ''
-    );
-
-  return (
-    Array.from(
-      cleaned
-    )
-      .slice(
-        0,
-        100
-      )
-      .join(
-        ''
-      ) ||
+function cleanYouTubeTitle(value) {
+  const cleaned = textValue(
+    value,
     'UploadPilot video'
-  );
+  ).replace(/[<>]/g, '');
+
+  return Array.from(cleaned)
+    .slice(0, 100)
+    .join('') || 'UploadPilot video';
 }
 
+function truncateUtf8(value, maxBytes) {
+  const source = String(value || '');
 
-function truncateUtf8(
-  value,
-  maxBytes
-) {
-  const source =
-    String(
-      value ||
-      ''
-    );
-
-  if (
-    Buffer.byteLength(
-      source,
-      'utf8'
-    ) <=
-    maxBytes
-  ) {
+  if (Buffer.byteLength(source, 'utf8') <= maxBytes) {
     return source;
   }
 
-  let result =
-    '';
+  let result = '';
 
-  for (
-    const ch of source
-  ) {
-    const next =
-      result +
-      ch;
+  for (const ch of source) {
+    const next = result + ch;
 
-    if (
-      Buffer.byteLength(
-        next,
-        'utf8'
-      ) >
-      maxBytes
-    ) {
+    if (Buffer.byteLength(next, 'utf8') > maxBytes) {
       break;
     }
 
-    result =
-      next;
+    result = next;
   }
 
   return result;
 }
 
-
-function cleanYouTubeDescription(
-  value
-) {
+function cleanYouTubeDescription(value) {
   return truncateUtf8(
-    String(
-      value ||
-      ''
-    ).replace(
-      /[<>]/g,
-      ''
-    ),
+    String(value || '').replace(/[<>]/g, ''),
     5000
   );
 }
 
-
-function cleanYouTubePrivacy(
-  value
-) {
-  const privacy =
-    textValue(
-      value,
-      'public'
-    ).toLowerCase();
+function cleanYouTubePrivacy(value) {
+  const privacy = textValue(
+    value,
+    'public'
+  ).toLowerCase();
 
   if (
-    privacy ===
-      'public' ||
-    privacy ===
-      'private' ||
-    privacy ===
-      'unlisted'
+    privacy === 'public' ||
+    privacy === 'private' ||
+    privacy === 'unlisted'
   ) {
     return privacy;
   }
@@ -787,88 +467,41 @@ function cleanYouTubePrivacy(
   return 'public';
 }
 
+function cleanYouTubeCategoryId(value) {
+  const categoryId = textValue(
+    value,
+    '22'
+  );
 
-function cleanYouTubeCategoryId(
-  value
-) {
-  const categoryId =
-    textValue(
-      value,
-      '22'
-    );
-
-  return /^\d+$/.test(
-    categoryId
-  )
+  return /^\d+$/.test(categoryId)
     ? categoryId
     : '22';
 }
 
-
-function booleanValue(
-  value,
-  fallback = true
-) {
-  if (
-    value === undefined ||
-    value === null ||
-    value === ''
-  ) {
+function booleanValue(value, fallback = true) {
+  if (value === undefined || value === null || value === '') {
     return fallback;
   }
 
-  if (
-    typeof value ===
-    'boolean'
-  ) {
+  if (typeof value === 'boolean') {
     return value;
   }
 
-  const raw =
-    String(
-      value
-    )
-      .trim()
-      .toLowerCase();
+  const raw = String(value).trim().toLowerCase();
 
-  if (
-    [
-      'true',
-      'yes',
-      '1'
-    ].includes(
-      raw
-    )
-  ) {
-    return true;
-  }
-
-  if (
-    [
-      'false',
-      'no',
-      '0'
-    ].includes(
-      raw
-    )
-  ) {
-    return false;
-  }
+  if (['true', 'yes', '1'].includes(raw)) return true;
+  if (['false', 'no', '0'].includes(raw)) return false;
 
   return fallback;
 }
 
-
-async function resolveYouTubeOutput(
-  body
-) {
-  const candidate =
-    textValue(
-      body.filename ||
-      body.render_url ||
-      body.render_url_text ||
-      body.video_url
-    );
+async function resolveYouTubeOutput(body) {
+  const candidate = textValue(
+    body.filename ||
+    body.render_url ||
+    body.render_url_text ||
+    body.video_url
+  );
 
   if (!candidate) {
     throw Object.assign(
@@ -876,116 +509,68 @@ async function resolveYouTubeOutput(
         'YouTube upload requires filename or render_url.'
       ),
       {
-        status:
-          400,
-
-        code:
-          'YOUTUBE_OUTPUT_REQUIRED'
+        status: 400,
+        code: 'YOUTUBE_OUTPUT_REQUIRED'
       }
     );
   }
 
-  let name =
-    '';
+  let name = '';
 
   try {
-    const parsed =
-      new URL(
-        candidate,
-        PUBLIC_BASE_URL ||
-        'http://localhost'
-      );
+    const parsed = new URL(
+      candidate,
+      PUBLIC_BASE_URL || 'http://localhost'
+    );
 
-    name =
-      path.basename(
-        parsed.pathname
-      );
-
+    name = path.basename(parsed.pathname);
   } catch {
-    name =
-      path.basename(
-        candidate.split(
-          /[?#]/,
-          1
-        )[0]
-      );
+    name = path.basename(
+      candidate.split(/[?#]/, 1)[0]
+    );
   }
 
-  if (
-    !/^[a-zA-Z0-9._-]+\.mp4$/.test(
-      name
-    )
-  ) {
+  if (!/^[a-zA-Z0-9._-]+\.mp4$/.test(name)) {
     throw Object.assign(
-      new Error(
-        'Invalid YouTube output filename.'
-      ),
+      new Error('Invalid YouTube output filename.'),
       {
-        status:
-          400,
-
-        code:
-          'YOUTUBE_OUTPUT_INVALID'
+        status: 400,
+        code: 'YOUTUBE_OUTPUT_INVALID'
       }
     );
   }
 
-  const filePath =
-    path.join(
-      OUTPUT_DIR,
-      name
-    );
+  const filePath = path.join(
+    OUTPUT_DIR,
+    name
+  );
 
   let info;
 
   try {
-    info =
-      await stat(
-        filePath
-      );
-
+    info = await stat(filePath);
   } catch {
     throw Object.assign(
-      new Error(
-        'Rendered MP4 was not found on the worker.'
-      ),
+      new Error('Rendered MP4 was not found on the worker.'),
       {
-        status:
-          404,
-
-        code:
-          'YOUTUBE_OUTPUT_NOT_FOUND',
-
+        status: 404,
+        code: 'YOUTUBE_OUTPUT_NOT_FOUND',
         details: {
-          filename:
-            name
+          filename: name
         }
       }
     );
   }
 
-  if (
-    !info.isFile() ||
-    info.size <=
-      0
-  ) {
+  if (!info.isFile() || info.size <= 0) {
     throw Object.assign(
-      new Error(
-        'Rendered MP4 is not a valid file.'
-      ),
+      new Error('Rendered MP4 is not a valid file.'),
       {
-        status:
-          422,
-
-        code:
-          'YOUTUBE_OUTPUT_INVALID_FILE',
-
+        status: 422,
+        code: 'YOUTUBE_OUTPUT_INVALID_FILE',
         details: {
-          filename:
-            name,
-
-          size:
-            info.size
+          filename: name,
+          size: info.size
         }
       }
     );
@@ -994,11 +579,9 @@ async function resolveYouTubeOutput(
   return {
     name,
     filePath,
-    size:
-      info.size
+    size: info.size
   };
 }
-
 
 function requestBuffer(
   target,
@@ -1008,83 +591,53 @@ function requestBuffer(
     body = null
   } = {}
 ) {
-  return new Promise(
-    (
-      resolve,
-      reject
-    ) => {
-      const targetUrl =
-        target instanceof URL
-          ? target
-          : new URL(
-              target
-            );
+  return new Promise((resolve, reject) => {
+    const targetUrl =
+      target instanceof URL
+        ? target
+        : new URL(target);
 
-      const client =
-        targetUrl.protocol ===
-        'https:'
-          ? https
-          : http;
+    const client =
+      targetUrl.protocol === 'https:'
+        ? https
+        : http;
 
-      const req =
-        client.request(
-          targetUrl,
-          {
-            method,
-            headers
-          },
-          response => {
-            const chunks =
-              [];
+    const req = client.request(
+      targetUrl,
+      {
+        method,
+        headers
+      },
+      response => {
+        const chunks = [];
 
-            response.on(
-              'data',
-              chunk => {
-                chunks.push(
-                  chunk
-                );
-              }
-            );
+        response.on('data', chunk => {
+          chunks.push(chunk);
+        });
 
-            response.on(
-              'end',
-              () => {
-                resolve({
-                  status:
-                    response.statusCode ||
-                    0,
-
-                  headers:
-                    response.headers,
-
-                  body:
-                    Buffer.concat(
-                      chunks
-                    ).toString(
-                      'utf8'
-                    )
-                });
-              }
-            );
-          }
-        );
-
-      req.on(
-        'error',
-        reject
-      );
-
-      if (body) {
-        req.write(
-          body
-        );
+        response.on('end', () => {
+          resolve({
+            status:
+              response.statusCode || 0,
+            headers:
+              response.headers,
+            body:
+              Buffer.concat(chunks)
+                .toString('utf8')
+          });
+        });
       }
+    );
 
-      req.end();
+    req.on('error', reject);
+
+    if (body) {
+      req.write(body);
     }
-  );
-}
 
+    req.end();
+  });
+}
 
 function uploadFileToUrl(
   target,
@@ -1092,135 +645,80 @@ function uploadFileToUrl(
     filePath,
     accessToken,
     size,
-    contentType =
-      'video/mp4'
+    contentType = 'video/mp4'
   }
 ) {
-  return new Promise(
-    (
-      resolve,
-      reject
-    ) => {
-      const targetUrl =
-        new URL(
-          target
-        );
+  return new Promise((resolve, reject) => {
+    const targetUrl = new URL(target);
+    const client =
+      targetUrl.protocol === 'https:'
+        ? https
+        : http;
 
-      const client =
-        targetUrl.protocol ===
-        'https:'
-          ? https
-          : http;
-
-      const req =
-        client.request(
-          targetUrl,
-          {
-            method:
-              'PUT',
-
-            headers: {
-              authorization:
-                `Bearer ${accessToken}`,
-
-              'content-type':
-                contentType,
-
-              'content-length':
-                size
-            }
-          },
-          response => {
-            const chunks =
-              [];
-
-            response.on(
-              'data',
-              chunk => {
-                chunks.push(
-                  chunk
-                );
-              }
-            );
-
-            response.on(
-              'end',
-              () => {
-                resolve({
-                  status:
-                    response.statusCode ||
-                    0,
-
-                  headers:
-                    response.headers,
-
-                  body:
-                    Buffer.concat(
-                      chunks
-                    ).toString(
-                      'utf8'
-                    )
-                });
-              }
-            );
-          }
-        );
-
-      req.on(
-        'error',
-        reject
-      );
-
-      const stream =
-        createReadStream(
-          filePath
-        );
-
-      stream.on(
-        'error',
-        error => {
-          req.destroy(
-            error
-          );
+    const req = client.request(
+      targetUrl,
+      {
+        method: 'PUT',
+        headers: {
+          authorization:
+            `Bearer ${accessToken}`,
+          'content-type':
+            contentType,
+          'content-length':
+            size
         }
-      );
+      },
+      response => {
+        const chunks = [];
 
-      stream.pipe(
-        req
-      );
-    }
-  );
-}
+        response.on('data', chunk => {
+          chunks.push(chunk);
+        });
 
-
-function parseJsonBody(
-  raw
-) {
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(
-      raw
+        response.on('end', () => {
+          resolve({
+            status:
+              response.statusCode || 0,
+            headers:
+              response.headers,
+            body:
+              Buffer.concat(chunks)
+                .toString('utf8')
+          });
+        });
+      }
     );
 
+    req.on('error', reject);
+
+    const stream = createReadStream(filePath);
+
+    stream.on('error', error => {
+      req.destroy(error);
+    });
+
+    stream.pipe(req);
+  });
+}
+
+function parseJsonBody(raw) {
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
   } catch {
     return null;
   }
 }
-
 
 function youtubeApiError(
   message,
   response,
   code
 ) {
-  const parsed =
-    parseJsonBody(
-      response &&
-      response.body
-    );
+  const parsed = parseJsonBody(
+    response && response.body
+  );
 
   const apiMessage =
     parsed &&
@@ -1230,66 +728,43 @@ function youtubeApiError(
       : null;
 
   return Object.assign(
-    new Error(
-      apiMessage ||
-      message
-    ),
+    new Error(apiMessage || message),
     {
-      status:
-        502,
-
+      status: 502,
       code,
-
       details: {
         googleStatus:
-          response &&
-          response.status,
-
+          response && response.status,
         googleResponse:
           parsed ||
-          (
-            response &&
-            response.body
-          ) ||
+          (response && response.body) ||
           null
       }
     }
   );
 }
 
-
-async function uploadRenderedVideoToYouTube(
-  body
-) {
-  const accessToken =
-    textValue(
-      body.access_token
-    );
+async function uploadRenderedVideoToYouTube(body) {
+  const accessToken = textValue(
+    body.access_token
+  );
 
   if (!accessToken) {
     throw Object.assign(
-      new Error(
-        'YouTube access_token is required.'
-      ),
+      new Error('YouTube access_token is required.'),
       {
-        status:
-          400,
-
-        code:
-          'YOUTUBE_ACCESS_TOKEN_REQUIRED'
+        status: 400,
+        code: 'YOUTUBE_ACCESS_TOKEN_REQUIRED'
       }
     );
   }
 
   const output =
-    await resolveYouTubeOutput(
-      body
-    );
+    await resolveYouTubeOutput(body);
 
   const title =
     cleanYouTubeTitle(
-      body.title ||
-      body.title_text
+      body.title || body.title_text
     );
 
   const description =
@@ -1315,23 +790,18 @@ async function uploadRenderedVideoToYouTube(
       description,
       categoryId
     },
-
     status: {
       privacyStatus
     }
   };
 
-  const metadataBody =
-    Buffer.from(
-      JSON.stringify(
-        metadata
-      )
-    );
+  const metadataBody = Buffer.from(
+    JSON.stringify(metadata)
+  );
 
-  const sessionUrl =
-    new URL(
-      'https://www.googleapis.com/upload/youtube/v3/videos'
-    );
+  const sessionUrl = new URL(
+    'https://www.googleapis.com/upload/youtube/v3/videos'
+  );
 
   sessionUrl.searchParams.set(
     'uploadType',
@@ -1343,10 +813,7 @@ async function uploadRenderedVideoToYouTube(
     'snippet,status'
   );
 
-  if (
-    body.notify_subscribers !==
-    undefined
-  ) {
+  if (body.notify_subscribers !== undefined) {
     sessionUrl.searchParams.set(
       'notifySubscribers',
       booleanValue(
@@ -1362,36 +829,26 @@ async function uploadRenderedVideoToYouTube(
     await requestBuffer(
       sessionUrl,
       {
-        method:
-          'POST',
-
+        method: 'POST',
         headers: {
           authorization:
             `Bearer ${accessToken}`,
-
           'content-type':
             'application/json; charset=UTF-8',
-
           'content-length':
             metadataBody.length,
-
           'x-upload-content-length':
             output.size,
-
           'x-upload-content-type':
             'video/mp4'
         },
-
-        body:
-          metadataBody
+        body: metadataBody
       }
     );
 
   if (
-    sessionResponse.status <
-      200 ||
-    sessionResponse.status >=
-      300
+    sessionResponse.status < 200 ||
+    sessionResponse.status >= 300
   ) {
     throw youtubeApiError(
       'YouTube rejected the resumable upload session.',
@@ -1409,11 +866,8 @@ async function uploadRenderedVideoToYouTube(
         'YouTube did not return a resumable upload URL.'
       ),
       {
-        status:
-          502,
-
-        code:
-          'YOUTUBE_SESSION_LOCATION_MISSING'
+        status: 502,
+        code: 'YOUTUBE_SESSION_LOCATION_MISSING'
       }
     );
   }
@@ -1424,45 +878,34 @@ async function uploadRenderedVideoToYouTube(
       {
         filePath:
           output.filePath,
-
         accessToken,
-
         size:
           output.size,
-
         contentType:
           'video/mp4'
       }
     );
 
   if (
-    uploadResponse.status !==
-      200 &&
-    uploadResponse.status !==
-      201
+    uploadResponse.status !== 200 &&
+    uploadResponse.status !== 201
   ) {
     throw youtubeApiError(
       'YouTube video upload failed.',
       uploadResponse,
-
-      uploadResponse.status ===
-        308
+      uploadResponse.status === 308
         ? 'YOUTUBE_UPLOAD_INCOMPLETE'
         : 'YOUTUBE_UPLOAD_FAILED'
     );
   }
 
-  const video =
-    parseJsonBody(
-      uploadResponse.body
-    );
+  const video = parseJsonBody(
+    uploadResponse.body
+  );
 
   const videoId =
-    video &&
-    video.id
-      ? String(
-          video.id
-        )
+    video && video.id
+      ? String(video.id)
       : '';
 
   if (!videoId) {
@@ -1471,16 +914,10 @@ async function uploadRenderedVideoToYouTube(
         'YouTube upload completed without returning a video id.'
       ),
       {
-        status:
-          502,
-
-        code:
-          'YOUTUBE_VIDEO_ID_MISSING',
-
+        status: 502,
+        code: 'YOUTUBE_VIDEO_ID_MISSING',
         details: {
-          googleResponse:
-            video ||
-            uploadResponse.body
+          googleResponse: video || uploadResponse.body
         }
       }
     );
@@ -1489,65 +926,33 @@ async function uploadRenderedVideoToYouTube(
   return {
     schema:
       'OLIVIA_YOUTUBE_UPLOAD_RESULT_V1',
-
-    ok:
-      true,
-
-    status:
-      'posted',
-
-    video_id:
-      videoId,
-
+    ok: true,
+    status: 'posted',
+    video_id: videoId,
     youtube_url:
       `https://www.youtube.com/watch?v=${videoId}`,
-
     filename:
       output.name,
-
     bytes:
       output.size,
-
     title,
-
     privacy_status:
       privacyStatus,
-
     category_id:
       categoryId,
-
     video
   };
 }
 
-
 /* =========================================================
    DODO PAYMENTS WEBHOOK HELPERS
-
-   - Verifies Standard Webhooks signatures with raw body bytes.
-   - Rejects stale/future timestamps outside a 5 minute window.
-   - Normalises Dodo events before forwarding them to Bubble.
 ========================================================= */
 
+function decodeDodoWebhookSecret(secret) {
+  let value = String(secret || '').trim();
 
-function decodeDodoWebhookSecret(
-  secret
-) {
-  let value =
-    String(
-      secret ||
-      ''
-    ).trim();
-
-  if (
-    value.startsWith(
-      'whsec_'
-    )
-  ) {
-    value =
-      value.slice(
-        'whsec_'.length
-      );
+  if (value.startsWith('whsec_')) {
+    value = value.slice('whsec_'.length);
   }
 
   if (!value) {
@@ -1556,11 +961,10 @@ function decodeDodoWebhookSecret(
     );
   }
 
-  const key =
-    Buffer.from(
-      value,
-      'base64'
-    );
+  const key = Buffer.from(
+    value,
+    'base64'
+  );
 
   if (!key.length) {
     throw new Error(
@@ -1571,251 +975,20 @@ function decodeDodoWebhookSecret(
   return key;
 }
 
-
-function verifyDodoWebhook(
-  rawBody,
-  headers
-) {
-  const webhookId =
-    String(
-      headers[
-        'webhook-id'
-      ] ||
-      ''
-    ).trim();
-
-  const timestampRaw =
-    String(
-      headers[
-        'webhook-timestamp'
-      ] ||
-      ''
-    ).trim();
-
-  const signatureHeader =
-    String(
-      headers[
-        'webhook-signature'
-      ] ||
-      ''
-    ).trim();
-
-  if (
-    !webhookId ||
-    !timestampRaw ||
-    !signatureHeader
-  ) {
-    throw Object.assign(
-      new Error(
-        'Missing Dodo webhook signature headers.'
-      ),
-      {
-        status:
-          401,
-
-        code:
-          'DODO_WEBHOOK_HEADERS_MISSING'
-      }
-    );
-  }
-
-  const timestamp =
-    Number(
-      timestampRaw
-    );
-
-  if (
-    !Number.isFinite(
-      timestamp
-    )
-  ) {
-    throw Object.assign(
-      new Error(
-        'Invalid Dodo webhook timestamp.'
-      ),
-      {
-        status:
-          401,
-
-        code:
-          'DODO_WEBHOOK_TIMESTAMP_INVALID'
-      }
-    );
-  }
-
-  const now =
-    Math.floor(
-      Date.now() /
-      1000
-    );
-
-  if (
-    now -
-    timestamp >
-    DODO_WEBHOOK_TOLERANCE_SECONDS
-  ) {
-    throw Object.assign(
-      new Error(
-        'Dodo webhook timestamp is too old.'
-      ),
-      {
-        status:
-          401,
-
-        code:
-          'DODO_WEBHOOK_TIMESTAMP_OLD'
-      }
-    );
-  }
-
-  if (
-    timestamp -
-    now >
-    DODO_WEBHOOK_TOLERANCE_SECONDS
-  ) {
-    throw Object.assign(
-      new Error(
-        'Dodo webhook timestamp is too far in the future.'
-      ),
-      {
-        status:
-          401,
-
-        code:
-          'DODO_WEBHOOK_TIMESTAMP_FUTURE'
-      }
-    );
-  }
-
-  const key =
-    decodeDodoWebhookSecret(
-      DODO_WEBHOOK_SECRET
-    );
-
-  const prefix =
-    Buffer.from(
-      `${webhookId}.${timestampRaw}.`,
-      'utf8'
-    );
-
-  const signedPayload =
-    Buffer.concat([
-      prefix,
-      rawBody
-    ]);
-
-  const expected =
-    createHmac(
-      'sha256',
-      key
-    )
-      .update(
-        signedPayload
-      )
-      .digest();
-
-  const candidates =
-    signatureHeader
-      .split(
-        /\s+/
-      )
-      .filter(
-        Boolean
-      );
-
-  const valid =
-    candidates.some(
-      entry => {
-        const comma =
-          entry.indexOf(
-            ','
-          );
-
-        if (
-          comma <= 0
-        ) {
-          return false;
-        }
-
-        const version =
-          entry.slice(
-            0,
-            comma
-          );
-
-        const encoded =
-          entry.slice(
-            comma + 1
-          );
-
-        if (
-          version !==
-            'v1' ||
-          !encoded
-        ) {
-          return false;
-        }
-
-        let supplied;
-
-        try {
-          supplied =
-            Buffer.from(
-              encoded,
-              'base64'
-            );
-
-        } catch {
-          return false;
-        }
-
-        return (
-          supplied.length ===
-            expected.length &&
-          timingSafeEqual(
-            supplied,
-            expected
-          )
-        );
-      }
-    );
-
-  if (!valid) {
-    throw Object.assign(
-      new Error(
-        'Invalid Dodo webhook signature.'
-      ),
-      {
-        status:
-          401,
-
-        code:
-          'DODO_WEBHOOK_SIGNATURE_INVALID'
-      }
-    );
-  }
-
-  return webhookId;
-}
-
-
-function dodoChallengeResponse(
-  challenge
-) {
+/*
+  Kept only for the challenge-response flow.
+  Normal webhook event verification below uses
+  Dodo's own SDK: webhooks.unwrap().
+*/
+function dodoChallengeResponse(challenge) {
   const key =
     decodeDodoWebhookSecret(
       DODO_WEBHOOK_SECRET
     );
 
   const verificationKey =
-    createHmac(
-      'sha256',
-      key
-    )
-      .update(
-        'wev-v1',
-        'utf8'
-      )
+    createHmac('sha256', key)
+      .update('wev-v1', 'utf8')
       .digest();
 
   const signature =
@@ -1824,33 +997,21 @@ function dodoChallengeResponse(
       verificationKey
     )
       .update(
-        String(
-          challenge
-        ),
+        String(challenge),
         'utf8'
       )
-      .digest(
-        'base64'
-      );
+      .digest('base64');
 
   return `v1,${signature}`;
 }
-
 
 function moneyFromMinorUnits(
   amount,
   currency
 ) {
-  const value =
-    Number(
-      amount
-    );
+  const value = Number(amount);
 
-  if (
-    !Number.isFinite(
-      value
-    )
-  ) {
+  if (!Number.isFinite(value)) {
     return 0;
   }
 
@@ -1875,15 +1036,12 @@ function moneyFromMinorUnits(
     ]);
 
   return zeroDecimal.has(
-    String(
-      currency ||
-      ''
-    ).toUpperCase()
+    String(currency || '')
+      .toUpperCase()
   )
     ? value
     : value / 100;
 }
-
 
 function normaliseDodoEvent(
   event,
@@ -1891,34 +1049,27 @@ function normaliseDodoEvent(
 ) {
   const data =
     event &&
-    typeof event ===
-      'object'
-      ? (
-          event.data ||
-          {}
-        )
+    typeof event === 'object'
+      ? (event.data || {})
       : {};
 
   const metadata =
     data &&
-    typeof data.metadata ===
-      'object' &&
+    typeof data.metadata === 'object' &&
     data.metadata
       ? data.metadata
       : {};
 
   const customer =
     data &&
-    typeof data.customer ===
-      'object' &&
+    typeof data.customer === 'object' &&
     data.customer
       ? data.customer
       : {};
 
   const eventType =
     textValue(
-      event &&
-      event.type
+      event && event.type
     );
 
   const currency =
@@ -2008,53 +1159,42 @@ function normaliseDodoEvent(
   };
 }
 
-
 async function forwardDodoEventToBubble(
   payload
 ) {
-  if (
-    !BUBBLE_DODO_WEBHOOK_URL
-  ) {
+  if (!BUBBLE_DODO_WEBHOOK_URL) {
     throw Object.assign(
       new Error(
         'BUBBLE_DODO_WEBHOOK_URL is not configured.'
       ),
       {
-        status:
-          503,
-
+        status: 503,
         code:
           'BUBBLE_DODO_URL_MISSING'
       }
     );
   }
 
-  if (
-    !BUBBLE_DODO_WEBHOOK_TOKEN
-  ) {
+  if (!BUBBLE_DODO_WEBHOOK_TOKEN) {
     throw Object.assign(
       new Error(
         'BUBBLE_DODO_WEBHOOK_TOKEN is not configured.'
       ),
       {
-        status:
-          503,
-
+        status: 503,
         code:
           'BUBBLE_DODO_TOKEN_MISSING'
       }
     );
   }
 
-  const body =
-    Buffer.from(
-      JSON.stringify({
-        ...payload,
-
-        relay_token:
-          BUBBLE_DODO_WEBHOOK_TOKEN
-      })
-    );
+  const body = Buffer.from(
+    JSON.stringify({
+      ...payload,
+      relay_token:
+        BUBBLE_DODO_WEBHOOK_TOKEN
+    })
+  );
 
   const response =
     await requestBuffer(
@@ -2076,19 +1216,15 @@ async function forwardDodoEventToBubble(
     );
 
   if (
-    response.status <
-      200 ||
-    response.status >=
-      300
+    response.status < 200 ||
+    response.status >= 300
   ) {
     throw Object.assign(
       new Error(
         `Bubble Dodo relay returned HTTP ${response.status}.`
       ),
       {
-        status:
-          502,
-
+        status: 502,
         code:
           'BUBBLE_DODO_RELAY_FAILED',
 
@@ -2106,7 +1242,6 @@ async function forwardDodoEventToBubble(
   return response;
 }
 
-
 async function handleDodoWebhook(
   req,
   res
@@ -2119,15 +1254,12 @@ async function handleDodoWebhook(
     );
 
   if (challenge) {
-    if (
-      !DODO_WEBHOOK_SECRET
-    ) {
+    if (!DODO_WEBHOOK_SECRET) {
       return json(
         res,
         503,
         {
-          ok:
-            false,
+          ok: false,
 
           error:
             'DODO_WEBHOOK_SECRET is not configured.',
@@ -2146,11 +1278,8 @@ async function handleDodoWebhook(
     const payload =
       Buffer.from(
         JSON.stringify({
-          ok:
-            true,
-
-          challenge:
-            true
+          ok: true,
+          challenge: true
         })
       );
 
@@ -2176,15 +1305,12 @@ async function handleDodoWebhook(
     );
   }
 
-  if (
-    !DODO_WEBHOOK_SECRET
-  ) {
+  if (!DODO_WEBHOOK_SECRET) {
     return json(
       res,
       503,
       {
-        ok:
-          false,
+        ok: false,
 
         error:
           'DODO_WEBHOOK_SECRET is not configured.',
@@ -2195,38 +1321,83 @@ async function handleDodoWebhook(
     );
   }
 
+  /*
+    IMPORTANT:
+    The SDK must receive the exact raw body string
+    plus the original webhook headers.
+  */
   const rawBody =
-    await readRawBody(
-      req
-    );
+    await readRawBody(req);
+
+  const rawBodyText =
+    rawBody.toString('utf8');
 
   const webhookId =
-    verifyDodoWebhook(
-      rawBody,
-      req.headers
+    textValue(
+      req.headers[
+        'webhook-id'
+      ]
     );
+
+  const webhookHeaders = {};
+
+  for (
+    const [name, value]
+    of Object.entries(
+      req.headers
+    )
+  ) {
+    if (Array.isArray(value)) {
+      webhookHeaders[name] =
+        value.join(',');
+    } else if (
+      value !== undefined
+    ) {
+      webhookHeaders[name] =
+        String(value);
+    }
+  }
 
   let event;
 
   try {
     event =
-      JSON.parse(
-        rawBody.toString(
-          'utf8'
-        ) || '{}'
-      );
+      dodoWebhookClient
+        .webhooks
+        .unwrap(
+          rawBodyText,
+          {
+            headers:
+              webhookHeaders,
 
-  } catch {
+            key:
+              DODO_WEBHOOK_SECRET
+          }
+        );
+
+  } catch (error) {
     throw Object.assign(
       new Error(
-        'Invalid JSON in Dodo webhook body.'
+        'Invalid Dodo webhook signature.'
       ),
       {
-        status:
-          400,
+        status: 401,
 
         code:
-          'DODO_WEBHOOK_JSON_INVALID'
+          'DODO_WEBHOOK_SIGNATURE_INVALID',
+
+        details: {
+          verifier:
+            'dodopayments-sdk',
+
+          message:
+            error &&
+            error.message
+              ? String(
+                  error.message
+                )
+              : null
+        }
       }
     );
   }
@@ -2265,11 +1436,8 @@ async function handleDodoWebhook(
     res,
     200,
     {
-      ok:
-        true,
-
-      received:
-        true,
+      ok: true,
+      received: true,
 
       event_type:
         normalised.event_type,
@@ -2279,12 +1447,6 @@ async function handleDodoWebhook(
     }
   );
 }
-
-
-/* =========================================================
-   HTTP SERVER
-========================================================= */
-
 
 const server =
   http.createServer(
@@ -2299,16 +1461,9 @@ const server =
           `http://${req.headers.host || 'localhost'}`
         );
 
-
-      /* -----------------------------------------------------
-         HEALTH
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'GET' &&
-        url.pathname ===
-          '/health'
+        req.method === 'GET' &&
+        url.pathname === '/health'
       ) {
         const version =
           await ffmpegVersion();
@@ -2328,7 +1483,7 @@ const server =
               'olivia-render-worker',
 
             worker:
-              'V129-DODO-WEBHOOK',
+              'V130-DODO-SDK-WEBHOOK',
 
             ffmpeg:
               version
@@ -2336,14 +1491,8 @@ const server =
         );
       }
 
-
-      /* -----------------------------------------------------
-         PUBLIC OUTPUT
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'GET' &&
+        req.method === 'GET' &&
         url.pathname.startsWith(
           '/outputs/'
         )
@@ -2355,14 +1504,8 @@ const server =
         );
       }
 
-
-      /* -----------------------------------------------------
-         PUBLIC DOWNLOAD
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'GET' &&
+        req.method === 'GET' &&
         url.pathname.startsWith(
           '/download/'
         )
@@ -2374,15 +1517,12 @@ const server =
         );
       }
 
-
       /*
-        Dodo must reach this route without WORKER_TOKEN.
-        Security is provided by Dodo's verified webhook signature.
+        Dodo reaches this route without WORKER_TOKEN.
+        Security is provided by Dodo webhook signature verification.
       */
-
       if (
-        req.method ===
-          'POST' &&
+        req.method === 'POST' &&
         url.pathname ===
           '/dodo/webhook'
       ) {
@@ -2392,9 +1532,7 @@ const server =
             res
           );
 
-        } catch (
-          error
-        ) {
+        } catch (error) {
           console.error(
             '[DODO WEBHOOK ERROR]',
             error
@@ -2405,8 +1543,7 @@ const server =
             error.status ||
               500,
             {
-              ok:
-                false,
+              ok: false,
 
               error:
                 error.message,
@@ -2423,16 +1560,7 @@ const server =
         }
       }
 
-
-      /* -----------------------------------------------------
-         PRIVATE ROUTES REQUIRE WORKER TOKEN
-      ----------------------------------------------------- */
-
-      if (
-        !authorized(
-          req
-        )
-      ) {
+      if (!authorized(req)) {
         return json(
           res,
           401,
@@ -2443,14 +1571,8 @@ const server =
         );
       }
 
-
-      /* -----------------------------------------------------
-         YOUTUBE UPLOAD
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'POST' &&
+        req.method === 'POST' &&
         url.pathname ===
           '/youtube/upload'
       ) {
@@ -2480,9 +1602,7 @@ const server =
             }
           );
 
-        } catch (
-          error
-        ) {
+        } catch (error) {
           console.error(
             '[OLIVIA YOUTUBE UPLOAD ERROR]',
             error
@@ -2521,14 +1641,8 @@ const server =
         }
       }
 
-
-      /* -----------------------------------------------------
-         PLAN
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'POST' &&
+        req.method === 'POST' &&
         url.pathname ===
           '/plan'
       ) {
@@ -2584,9 +1698,7 @@ const server =
             }
           );
 
-        } catch (
-          error
-        ) {
+        } catch (error) {
           return json(
             res,
             error.status ||
@@ -2599,14 +1711,8 @@ const server =
         }
       }
 
-
-      /* -----------------------------------------------------
-         ASYNC RENDER START
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'POST' &&
+        req.method === 'POST' &&
         url.pathname ===
           '/render/start'
       ) {
@@ -2832,9 +1938,7 @@ const server =
             }
           );
 
-        } catch (
-          error
-        ) {
+        } catch (error) {
           return json(
             res,
             error.status ||
@@ -2853,14 +1957,8 @@ const server =
         }
       }
 
-
-      /* -----------------------------------------------------
-         ASYNC RENDER STATUS
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'GET' &&
+        req.method === 'GET' &&
         url.pathname.startsWith(
           '/render/status/'
         )
@@ -2957,14 +2055,8 @@ const server =
         );
       }
 
-
-      /* -----------------------------------------------------
-         SYNCHRONOUS RENDER
-      ----------------------------------------------------- */
-
       if (
-        req.method ===
-          'POST' &&
+        req.method === 'POST' &&
         url.pathname ===
           '/render'
       ) {
@@ -3013,9 +2105,7 @@ const server =
             result
           );
 
-        } catch (
-          error
-        ) {
+        } catch (error) {
           console.error(
             '[OLIVIA RENDER ERROR]',
             error
@@ -3060,12 +2150,7 @@ const server =
         }
       }
 
-
-      /* -----------------------------------------------------
-         NOT FOUND
-      ----------------------------------------------------- */
-
-      json(
+      return json(
         res,
         404,
         {
@@ -3075,7 +2160,6 @@ const server =
       );
     }
   );
-
 
 server.listen(
   PORT,
